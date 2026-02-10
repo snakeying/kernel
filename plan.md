@@ -1,0 +1,443 @@
+# Kernel - 个人 AI 助手
+
+## Context
+
+从零构建个人 AI 助手（代号 Kernel），部署在 Telegram 上。OpenClaw 虽火但 bug 多、安全性差，所以自己造。
+
+目标：本地优先、隐私可控、模块化可扩展的个人 AI Agent。
+
+运行目标：Windows（开发）+ Debian 12（部署），两端都要可运行。
+
+## 核心架构
+
+```
+用户 (Telegram)
+    ↓ 文字/图片/文件
+┌──────────────────────────────────────────────┐
+│  bot.py — TG 消息收发                        │
+│  图片→base64  文件→提取内容                    │
+└─────────────────┬────────────────────────────┘
+                  ↓
+┌──────────────────────────────────────────────┐
+│  agent.py — 对话层 (LLM)                     │
+│  Claude API / OpenAI 兼容 API                │
+│  System prompt = SOUL.md + 记忆上下文        │
+│  通过 tool use 自主决定行动                  │
+│                                              │
+│  Tools:                                      │
+│  ├── delegate_to_cli → CC / Codex (干活)     │
+│  ├── set_reminder    → 内置定时提醒          │
+│  ├── memory_*        → 记忆读写              │
+│  └── [MCP tools]     → 动态加载的 MCP 工具   │
+└───────┬──────────┬──────────┬────────────────┘
+        ↓          ↓          ↓
+┌────────────┐ ┌────────┐ ┌────────────────────┐
+│ 内置工具   │ │ MCP    │ │ CLI 委派           │
+│ - scheduler│ │ Client │ │ - Claude Code(默认)│
+│ - heartbeat│ │ - exa  │ │ - Codex            │
+│ - memory   │ │ - c7   │ │                    │
+└────────────┘ └────────┘ └────────────────────┘
+```
+
+### 设计原则
+
+- **LLM 通过 tool use 自主决定行动**，不做硬编码的任务分类
+- **"干活"全部委派给 CLI Agent**（文件操作、shell、浏览器、代码编辑等）
+- **Kernel 只内置 CLI 做不了的事**：常驻进程功能（定时提醒、记忆）
+- **MCP client 提供扩展能力**：搜索、文档查询等通过 MCP servers 动态加载
+- **SOUL.md 定义人格**：AI 的性格、规则、偏好，用户可自定义
+- CLI 委派优先级：用户自然语言指定 > 默认 Claude Code
+
+## 技术栈
+
+| 组件 | 选型 | 说明 |
+|------|------|------|
+| 语言 | Python 3.11 | uv 管理依赖 |
+| TG Bot | python-telegram-bot v21+ | 成熟稳定，async |
+| LLM - Claude | anthropic SDK | Messages API + tool use + streaming |
+| LLM - OpenAI兼容 | openai SDK | chat/completions |
+| MCP | mcp SDK (Python) | MCP client，连接任意 MCP server |
+| Markdown→TG | mistune | 轻量 Markdown parser + 自定义 TG HTML renderer |
+| CLI - Claude Code | claude-code SDK (子进程) | 任务委派 |
+| CLI - Codex | codex CLI (子进程) | 可选的任务委派 |
+| 记忆 | SQLite + FTS5 | 轻量持久化 + 全文搜索 |
+| 调度 | APScheduler | 定时任务/提醒/heartbeat |
+| 配置 | TOML | 简洁可读 |
+
+## 项目结构
+
+```
+H:\Project-X\
+├── pyproject.toml
+├── config.toml              # 用户配置（providers、TG token、MCP servers 等）
+├── config.example.toml      # 配置模板
+├── SOUL.md                  # AI 人格定义（system prompt）
+├── HEARTBEAT.md             # 心跳任务清单
+├── kernel/
+│   ├── __init__.py
+│   ├── __main__.py          # 入口：uv run -m kernel
+│   ├── bot.py               # TG Bot 入口：文字/图片/文件处理
+│   ├── config.py            # 配置加载
+│   ├── agent.py             # Agent 核心：tool use 循环 + CLI 委派
+│   ├── models/
+│   │   ├── __init__.py
+│   │   ├── base.py          # LLM 抽象基类
+│   │   ├── claude.py        # Anthropic Claude 实现
+│   │   └── openai_compat.py # OpenAI 兼容 API 实现（chat/completions）
+│   ├── tools/
+│   │   ├── __init__.py
+│   │   ├── registry.py      # 工具注册表
+│   │   └── scheduler.py     # 定时任务/提醒 + heartbeat 心跳
+│   ├── mcp/
+│   │   ├── __init__.py
+│   │   └── client.py        # MCP client：连接 MCP servers，加载 tools
+│   ├── cli/
+│   │   ├── __init__.py
+│   │   ├── base.py          # CLI Agent 抽象基类
+│   │   ├── claude_code.py   # Claude Code 委派（默认）
+│   │   └── codex.py         # Codex 委派
+│   └── memory/
+│       ├── __init__.py
+│       └── store.py         # SQLite 记忆存储 + 全文搜索
+└── data/                    # 运行时数据（SQLite DB、下载文件、CLI 输出等；默认 `data_dir="data"`）
+```
+
+## 核心流程
+
+1. 用户在 TG 发消息（文字/文件/图片）
+2. `bot.py` 预处理：
+   - 图片 → base64 编码，传给 LLM Vision
+   - 文件 → 提取文本内容（仅 UTF-8 文本/代码等；不支持 PDF/Office）
+3. `agent.py` 加载 SOUL.md + 会话历史 + 召回的长期记忆（top-k），构建完整 messages
+4. 发送给选定的 LLM（Claude/OpenAI），支持 streaming
+5. LLM 通过 tool use 自主决定行动：
+   - **直接回复**：普通对话；先发送占位提示，最终以 Telegram HTML（Markdown 渲染）按块分段发送（不流式编辑）
+   - **delegate_to_cli**：启动 CC/Codex 子进程，TG 发送等待提示；完成后完整输出回传 LLM，由 LLM 总结后发给用户
+   - **set_reminder**：内置定时器，到时间后主动推送 TG 消息
+   - **memory_***：读写长期记忆
+   - **[MCP tools]**：调用 MCP server 提供的工具（搜索、文档查询等）
+6. tool 执行结果回传 LLM，循环直到最终回复（单条消息最多 25 次 tool call）
+7. 最终回复发回 TG
+8. 保存会话历史（写入 DB 前做历史瘦身）
+
+## 关键设计决策
+
+### 已确认的取舍（单人开发优先）
+- **历史瘦身（默认开启）**：写入 SQLite 前，对“大体积内容”做替换；`/resume` 恢复的是“瘦身后的历史”，不保证复现全部细节。
+  - tool_result：用一句话摘要 + artifact 引用（如 `data/cli_outputs/xxx.txt`）替换
+  - 图片：base64 替换为 `[图片已处理]`
+  - 文件：提取文本替换为 `[文件 xxx.py 已处理]`
+- **长期记忆注入默认仅召回 top-k**（默认 5，可用 config.toml 的 `general.memory_recall_k` 调整），不全量注入上下文；其余通过 `memory_search` 现查。
+- **provider/model 是全局运行时状态**：不按 session 持久化；重启回到 config.toml 默认值；`/new` 继承当前 provider/model。
+- **`/cancel` 在 Phase 1 实现最小可用**：先取消 LLM streaming + tool loop；Phase 2 再扩展到取消 CLI 子进程。
+- **CLI 两个都可用**：默认 Claude Code；必要时可通过自然语言或 `delegate_to_cli(cli=...)` 指定 Codex。
+- **7 天清理策略维持不变**：下载文件与 `data_dir/cli_outputs/` 7 天自动清理；历史里引用的 artifact 可能过期（可接受）。
+
+### SOUL.md — AI 人格定义
+- 作为 system prompt 的核心部分加载
+- 定义 AI 的名字、性格、规则、偏好
+- 用户可自由编辑定制自己的 AI 助手人格
+
+### LLM 对话层
+```python
+class LLM(ABC):
+    async def chat(self, messages, tools=None, stream=False) -> AsyncIterator[Chunk] | Response
+```
+- Claude 和 OpenAI 兼容 API 统一接口
+- OpenAI 兼容层支持 `/v1/chat/completions`
+- tool use 格式在抽象层统一转换
+- OpenAI-compatible endpoint 能力差异：不做自动降级；遇到 streaming/tools/vision 等能力缺失直接报错，并提示切换 provider/model/endpoint
+- 支持 Vision（图片作为 image content 传给 LLM，不检查模型是否支持，由用户确保）
+- **多 Provider 支持**：config.toml 配置多个 provider（Anthropic、OpenAI、DeepSeek、Ollama 等）
+- **两级切换**：`/provider` 切换 provider，`/model` 切换当前 provider 下的模型
+- **provider/model 为全局运行时状态**，不按 session 存储且不持久化；进程重启后回到 config.toml 的默认值；`/new` 继承当前 provider/model
+- `/model` 仅允许在 config.toml 中为该 provider 配置的 `models=[...]` 里选择；不在列表中直接报错
+- 自然语言不切换对话模型，仅用于 CLI 委派时指定 CC/Codex
+
+### MCP Client
+- Kernel 作为 MCP client，启动时连接 config.toml 中配置的 MCP servers
+- servers 支持两种形态：http（url + 可选 headers）与 stdio（command + args）
+- 将 MCP tools 转换为 LLM tool use 格式，以 `{server_name}.{tool_name}` 命名避免重名，动态注册
+- LLM 可直接调用 MCP tools（exa 搜索、context7 文档查询等）
+- 用户可在 config.toml 中自由添加/移除 MCP servers
+- 启动时连接失败：跳过该 server，不阻塞启动
+- 运行中 server 掉线/超时：自动重连（指数退避）；重连失败：禁用该 server 的 tools + 日志告警
+
+### CLI 委派（delegate_to_cli）
+```python
+class CLIAgent(ABC):
+    async def run(self, task: str, cwd: str) -> str
+```
+- 作为 LLM 的一个 tool 注册，LLM 自主决定何时调用
+- tool 描述："当用户需要执行文件操作、代码编辑、项目分析、Shell 命令、浏览器操作等实际任务时使用"
+- Claude Code：通过子进程调用，统一执行 `command + args + [task]`（如 `claude -p --output-format text "task"`）
+- Codex：通过子进程调用，使用 `codex exec` 非交互模式；统一执行 `command + args + [task]`，并在运行时追加 `-C <cwd>` + `--output-last-message <file>`（确保可靠取回最终回复）。建议在 args 里固定 `-a never`（否则可能等待人工审批）。示例（默认 `data_dir="data"`）：`codex -a never exec --sandbox workspace-write --skip-git-repo-check --color never -C "H:\\Project-X" --output-last-message "data/cli_outputs/xxx.txt" "task"`
+- 默认 Claude Code；用户自然语言指定（"用codex帮我..."）时切换 Codex；不支持并发（串行执行）
+- 运行参数：`cwd` 优先取 tool 入参；否则使用 `general.default_workspace`（相对 config.toml 所在目录）；不做路径限制
+- 取消/超时：支持 TG `/cancel` 取消；CLI 子进程超时 10min 自动 kill
+- 执行期间：TG 发送等待提示（如"正在执行任务..."）
+- 完成后：完整输出回传给 LLM，由 LLM 总结后发给用户（不做实时进度转发）
+- CLI 输出落盘到 `data_dir/cli_outputs/`；传给 LLM 时超过 50K 字符则头尾截断（保留头部 + 尾部，中间省略）
+- 通过 exit code + 最终输出判断任务是否完成
+
+### 内置 Tool 接口（LLM tool use）
+- `delegate_to_cli(task: str, cwd: str | null = null, cli: "claude_code" | "codex" | null = null) -> {ok, cli, cwd, exit_code, output_path, output}`
+  - `cli=null` 时使用默认 Claude Code
+  - `output` 为传回 LLM 的内容（必要时按 50K 规则截断）；完整输出始终落盘在 `output_path`
+- `set_reminder(when: str, text: str) -> {id, when, text}`
+  - `when` 必须为带时区的 ISO8601 绝对时间；解析失败直接报错
+- `memory_add(text: str) -> {id}`
+- `memory_search(query: str, limit: int = 5) -> [{id, text, created_at}]`
+- `memory_list(limit: int = 200) -> [{id, text, created_at}]`
+- `memory_delete(id: int) -> {ok}`
+
+### 内置工具（仅限 CLI 做不了的）
+- **scheduler + heartbeat**：定时提醒 + 心跳机制（定期主动检查任务清单并通知用户）
+   - set_reminder：LLM 传 `when`（ISO8601 绝对时间，含时区）+ `text`（提醒内容），到时间后主动推送 TG 消息；reminders 由 Kernel 自己的 `reminders` 表持久化（不使用 APScheduler jobstore；进程重启后恢复）
+     - 离线补偿：启动后与每次 tick 检查“已到期但未发送”的提醒；若迟到不超过 `reminders.catch_up_hours`（默认 24h）则补发（消息中注明原定时间与迟到时长）；超过则标记为 expired，不补发，并发送一条汇总（例如“有 N 条提醒已过期未补发”）
+   - heartbeat：按 `heartbeat.interval_minutes` 配置的间隔唤醒（默认 0 = 关闭）；读取 HEARTBEAT.md（用户维护，Kernel 只读）全文传给 LLM；超过 10K 字符则截断；由 LLM 判断是否需要推送
+     - 防刷屏：静默时段 `heartbeat.quiet_hours`（默认关闭）内不调用 LLM、不推送；相同推送内容在 `heartbeat.cooldown_hours`（默认 6h）内去重抑制
+   - 有事 → 主动推送 TG 消息；没事 → 静默
+- **memory**：长期记忆读写，Kernel 自身状态
+- 工具通过装饰器注册，自动生成 JSON schema
+
+### 会话历史与长期记忆
+- Phase 1：会话历史落 SQLite（会话表 + 消息表）；消息存 messages JSON（含 tool_use/tool_result 结构），但**对大体积内容启用历史瘦身**，确保 DB 可控且 `/resume` 可用
+  - `/resume` 恢复“瘦身后的历史”；若需要完整输出，依赖 artifact 文件（可能因 7 天清理而过期）
+- 进程重启后**总是新对话**：不会自动 `/resume` 最近会话；历史只通过 `/history` + `/resume` 手动进入
+- Phase 4：长期记忆落 SQLite（独立表）+ FTS5 全文搜索
+- 触发：LLM 自动（由 SOUL.md 规则约束）+ 用户手动（`/remember`）
+- 召回：agent 先 FTS 召回 top-k（默认 5，可用 config.toml 的 `general.memory_recall_k` 调整）注入上下文；LLM 也可主动调用 `memory_search`
+- 管理：`/memory` 查看、`/forget <id>` 删除
+- FTS5 兜底：启动时检测 FTS5；不可用则 `memory_search` 退化为 LIKE，并在 `/status` 提示
+
+### 图片理解
+- TG 发图 → bot.py 下载并转 base64 → 作为 image content 传给 LLM
+- 不硬编码 vision 能力检查，由用户确保当前模型支持 vision
+- 图片超过 20MB 则提示用户，不传 LLM
+
+### 文件上传处理
+- TG 发文件 → bot.py 下载到 `data_dir/` → 根据类型提取文本内容
+- Phase 3 先支持：txt、代码文件（py/js/ts/json/yaml/md 等，必须 UTF-8）
+- 不支持：PDF、Office 文档、非 UTF-8 文本（解码失败直接提示用户）
+- Office 文档后置（当前不支持）
+- 文件最大 20MB，提取文本截断到 50K 字符
+- 提取的文本作为 user message 的一部分传给 LLM
+
+### 输出到 TG
+- 先发送占位提示（如“正在生成回复…”）
+- LLM 完成后一次性发送最终回复（Telegram HTML：对 Markdown 做本地渲染）
+- TG 单条消息限制 4096 字符；最终回复超长时按段落/代码块边界智能分割，依次发送多条消息
+- 若 HTML 解析失败（如 can't parse entities），回退到纯文本分段发送
+
+### Telegram 接入
+- 统一使用 long polling（开发与部署）
+- 启动时 `drop_pending_updates=True`
+- Phase 1 输出格式：Telegram HTML（**mistune** 解析 Markdown AST + 自定义 TelegramHTMLRenderer 映射到 TG 支持的标签；不支持的元素 graceful fallback 到纯文本；失败回退到纯文本 `parse_mode=None`）
+- 白名单：仅响应 `allowed_user` 的私聊（未配置则拒绝启动；推荐用 `@userinfobot` 获取）；非白名单消息静默丢弃
+- 推送目标：reminder/heartbeat 始终推送到 `allowed_user` 的私聊
+- LLM API 调用失败：直接把错误信息（脱敏后）发送到 TG（不做友好化包装）
+
+### 并发与取消
+- 全局串行：同时只处理一条用户消息；其余普通消息不排队（直接拒绝）
+- 忙碌提示：处理期间收到的新消息，**每个忙碌窗口只提示一次**（例如“正在处理上一条，请稍后或 /cancel”），其余静默丢弃
+- `/cancel` 走旁路不排队：立即中断当前 LLM streaming + tool loop，回复"已取消"；若正在委派 CLI（Phase 2 起），同时 kill CLI 子进程
+
+### 安全
+- API keys 不进代码：只在 config.toml 或环境变量（仅敏感项支持 env 覆盖）
+- 日志与错误信息脱敏：不得包含 TG token、provider api_key、MCP headers
+  - 普通 token/key：默认掩码为“保留前 4 + 后 4”；长度 ≤ 8 则全掩码
+  - HTTP headers（含 `Authorization`/`Cookie`/MCP headers）：始终整段替换为 `[REDACTED]`（不保留片段）
+- CLI 委派继承 CC/Codex 自身的安全机制
+
+### 上下文管理
+- 会话历史 + 记忆 + 文件内容可能超 LLM 上下文窗口
+- 截断策略：保留 system prompt（SOUL.md）+ 召回的长期记忆（top-k）+ 最近 N 轮对话，超限丢最旧消息
+- N 可在 config.toml 配置，默认 50 轮
+- 不做自动总结（复杂且费 token），先简单截断
+- **历史瘦身**（存入 DB 时即替换，`/resume` 天然安全）：
+  - tool_result：LLM 当轮看到完整内容并回复后，存入历史时替换为**规则化生成的一句话摘要**（不额外调用 LLM）。模板示例：`"重构任务已完成(成功)，详见 data/cli_outputs/xxx.txt"`。适用于 delegate_to_cli、MCP tools 等所有大体积 tool_result
+  - 图片：LLM 当轮处理后，存入历史时将 base64 image content 替换为 `[图片已处理]`
+  - 文件内容：LLM 当轮处理后，存入历史时将提取的文本替换为 `[文件 xxx.py 已处理]`
+
+### 时区
+- config.toml 配置固定时区（如 `timezone = "Asia/Shanghai"`）
+- scheduler/提醒统一使用该时区
+- Windows 环境需依赖 `tzdata` 以支持 IANA 时区
+
+### config.toml Schema
+```toml
+[telegram]
+token = "BOT_TOKEN"               # 必填；可用环境变量覆盖：KERNEL_TELEGRAM_TOKEN
+allowed_user = 123456789          # 必填：唯一授权的 TG user ID（未配置则拒绝启动；推荐用 @userinfobot 获取）
+
+[general]
+timezone = "Asia/Shanghai"
+default_provider = "anthropic"    # 启动时默认使用的 provider
+default_workspace = "."           # CLI 默认 cwd，默认为 config.toml 所在目录
+context_rounds = 50               # 上下文保留轮数
+memory_recall_k = 5               # 长期记忆默认注入条数（top-k）
+data_dir = "data"                 # 运行时数据目录，相对 config.toml 所在目录
+
+[reminders]
+catch_up_hours = 24               # 离线补偿窗口：迟到不超过该小时数则补发；超过则过期不补发
+
+[heartbeat]
+interval_minutes = 0              # 默认关闭；需要时再开启
+cooldown_hours = 6                # 相同推送内容去重窗口（按内容哈希判断）
+# quiet_hours = { start = "00:00", end = "08:00" }  # 可选：静默时段（本地时区），在此时段内不调用 LLM、不推送
+
+[providers.anthropic]
+type = "claude"
+api_base = "https://api.anthropic.com"  # 可选：默认官方 API endpoint
+api_key = "sk-ant-..."            # 可用环境变量覆盖：KERNEL_PROVIDER_ANTHROPIC_API_KEY
+max_tokens = 16384               # 必填（Claude Messages API 要求）；无代码级默认值；按模型能力设置
+default_model = "claude-sonnet-4-5-20250929"
+models = ["claude-sonnet-4-5-20250929", "claude-opus-4-6"]
+headers = { User-Agent = "Mozilla/5.0 ..." }  # 可选：自定义 HTTP headers
+
+[providers.openai]
+type = "openai_compat"
+api_base = "https://api.openai.com/v1"
+api_key = "sk-..."                # 可用环境变量覆盖：KERNEL_PROVIDER_OPENAI_API_KEY
+# max_tokens =                   # 可选：OpenAI 兼容类型不强制
+default_model = "gpt-4o"
+models = ["gpt-4o"]
+headers = { User-Agent = "Mozilla/5.0 ..." }  # 可选：自定义 HTTP headers
+
+[providers.deepseek]
+type = "openai_compat"
+api_base = "https://api.deepseek.com/v1"
+api_key = "sk-..."                # 可用环境变量覆盖：KERNEL_PROVIDER_DEEPSEEK_API_KEY
+default_model = "deepseek-chat"
+models = ["deepseek-chat"]
+headers = { User-Agent = "Mozilla/5.0 ..." }  # 可选：自定义 HTTP headers
+
+[titles]
+type = "openai_compat"               # 独立 provider 配置（不引用已有 provider）
+api_base = "https://..."
+api_key = "sk-..."                   # 可用环境变量覆盖：KERNEL_TITLES_API_KEY
+model = "claude-haiku-4-5-20251001"  # 推荐用便宜快速的模型
+max_tokens = 100                     # 标题不需要长输出
+headers = { User-Agent = "Mozilla/5.0 ..." }  # 可选：自定义 HTTP headers
+
+[cli.claude_code]
+command = "claude"                # 可执行文件路径
+args = ["-p", "--output-format", "text"]  # 额外参数，task 追加在末尾：command + args + [task]
+
+[cli.codex]
+command = "codex"
+args = ["-a", "never", "exec", "--sandbox", "workspace-write", "--skip-git-repo-check", "--color", "never"]
+
+[[mcp.servers]]
+name = "exa"
+type = "http"                       # http: url + 可选 headers；stdio: command + args
+url = "https://mcp.exa.ai/mcp"
+
+[[mcp.servers]]
+name = "context7"
+type = "http"
+url = "https://mcp.context7.com/mcp"
+headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }  # 示例：从环境变量注入（仅敏感项支持 env）
+```
+
+### 配置定位与覆盖
+- config.toml 定位：优先环境变量 `KERNEL_CONFIG`，否则默认使用当前工作目录下的 `config.toml`
+- 路径基准：SOUL.md / HEARTBEAT.md / `data_dir` 均相对 config.toml 所在目录
+- 环境变量覆盖（仅敏感项，优先级 env > config.toml）：
+  - `telegram.token` ← `KERNEL_TELEGRAM_TOKEN`
+  - `providers.<name>.api_key` ← `KERNEL_PROVIDER_<NAME>_API_KEY`（NAME=section 名大写，非字母数字转 `_`）
+  - `titles.api_key` ← `KERNEL_TITLES_API_KEY`
+  - `mcp.servers[*].headers` 支持 `${ENV_VAR}` 注入
+
+### 启动校验与缺失行为
+- `telegram.token` 或 `telegram.allowed_user` 缺失 → 拒绝启动并提示获取方式
+- 默认 provider 的 `api_key` 缺失 → 拒绝启动；非默认 provider 缺失 `api_key` → 允许启动但该 provider 不可用
+- MCP：headers 中引用的 `${ENV_VAR}` 缺失 → 跳过该 server 并告警；启动时连接失败也跳过，不阻塞启动
+
+### 数据目录与保留
+- `data_dir` 用于存放：SQLite DB、下载文件、CLI 输出、日志（均位于 `general.data_dir` 下）
+- 保留策略：会话历史/长期记忆永久保留；下载文件与 `data_dir/cli_outputs/` 7 天自动清理
+
+### 日志
+- 标准库 `logging`：默认输出到 stdout + `data_dir/logs/kernel.log`（RotatingFileHandler：10MB × 5）
+- 敏感信息脱敏规则见“安全”一节
+
+### SQLite 迁移
+- `PRAGMA user_version` + 简单迁移函数，不引入 Alembic
+
+## 分阶段实施计划
+
+### 执行约定（重要）
+- 每个 Phase 在一个新窗口/新会话中完成：先实现 → 按该 Phase 的“验证”验收 → 再进入下一 Phase
+- 每个 Phase 结束时同步更新 `plan.md`：记录新增决策/变更点、未完成事项、下一 Phase 的注意点
+
+### Phase 1：骨架 + 基础对话（先跑起来）
+1. 初始化项目：pyproject.toml、uv（含 `uv.lock`）、目录结构、`__main__.py`、.gitignore（忽略 config.toml、data/、.venv/、*.pyc、日志等）、README.md（Quickstart）
+2. `config.py` + `config.toml` + `config.example.toml` — 配置加载（含 providers、timezone、上下文轮数等）
+3. `SOUL.md` — AI 人格定义模板
+4. `models/base.py` — LLM 抽象接口
+5. `models/claude.py` — Claude Messages API（streaming + tool use + vision）
+6. `models/openai_compat.py` — OpenAI 兼容实现（chat/completions）
+7. `memory/store.py` — 最小版 SQLite（会话表 + 消息表，支持 /new /history /resume /del_history）
+8. `agent.py` — Agent 核心：会话管理 + tool use 循环 + 上下文截断 + 支持 `/cancel` 取消当前 streaming/tool loop
+9. `bot.py` — TG Bot：文字/图片消息收发 + 占位提示 + 最终 HTML 输出（Markdown 渲染 + 智能分段）+ 会话命令（含 `/cancel` `/status`）
+10. 验证：TG 发消息能收到格式化回复（Markdown 渲染），发图能理解，`/start` `/help` 可用，`/provider` `/model` 能切换，`/new` `/history` `/resume` 能管理会话，`/cancel` 能中止当前回复，`/status` 能显示关键状态
+
+### Phase 2：CLI 委派 + MCP（核心能力）
+11. `tools/registry.py` — 工具注册 + JSON schema 自动生成
+12. `cli/base.py` — CLI Agent 抽象接口
+13. `cli/claude_code.py` — Claude Code 集成
+14. `cli/codex.py` — Codex 集成
+15. `mcp/client.py` — MCP client：连接 servers，加载 tools
+16. `agent.py` 集成 delegate_to_cli + MCP tools
+17. 验证：能委派任务给 CC 并回传结果；`/cancel` 能中止委派；10min 超时自动 kill；能调用 MCP tools
+
+### Phase 3：文件处理
+18. `bot.py` 集成文件上传处理
+19. 验证：发送 UTF-8 txt/代码文件能读取内容；不支持类型（PDF/Office/非 UTF-8）有明确提示
+
+### Phase 4：长期记忆
+20. `memory/store.py` 扩展：长期记忆表 + FTS5 全文搜索
+21. `agent.py` 集成 memory 工具：LLM 自动记忆（SOUL.md 规则约束）+ `/remember` 手动记忆
+22. 验证：AI 能记住用户偏好，`/memory` `/forget` 正常工作
+
+### Phase 5：调度 + Heartbeat + 部署
+23. `tools/scheduler.py` — APScheduler 定时提醒 + heartbeat 心跳机制
+24. `HEARTBEAT.md` — 心跳任务清单模板
+25. `bot.py` 集成提醒命令：`/reminders` 列表 + `/del_reminder <id>` 取消；错误处理、重试、日志完善
+26. 部署脚本（systemd service for Debian 12）
+27. 验证：提醒按时触发，`/reminders` `/del_reminder` 正常工作，heartbeat 主动通知，Debian 12 上稳定运行
+
+## TG 命令汇总
+
+| 命令 | 功能 |
+|------|------|
+| `/start` | 显示欢迎/Quickstart（等同 `/help`） |
+| `/help` | 显示命令列表与关键配置提示 |
+| `/new` | 新开会话（当前会话归档，开始全新对话） |
+| `/history` | 查看历史会话列表（最新在前；显示 `#<n>` 序号 + 日期 + 标题） |
+| `/resume #<n>` | 继续指定的历史会话（先 `/history`，再用 `#` 序号） |
+| `/retitle [#<n>]` | 重生会话标题（默认：当前会话；如指定 `#<n>` 需先 `/history`） |
+| `/del_history #<n>[/#n2/...]` | 删除一个或多个会话（先 `/history`） |
+| `/provider [name]` | 查看/切换当前 provider |
+| `/model [name]` | 查看/切换当前 provider 下的模型 |
+| `/remember <text>` | 手动存入长期记忆 |
+| `/memory` | 查看所有长期记忆 |
+| `/forget <id>` | 删除指定记忆 |
+| `/reminders` | 查看所有待触发的提醒 |
+| `/del_reminder <id>` | 取消指定提醒 |
+| `/cancel` | 取消当前任务（中断 streaming + tool loop + CLI） |
+| `/status` | 查看当前状态（session、provider/model、运行中的 CLI、最后错误） |
+
+## Phase 1
+
+- 新增：Claude `max_tokens` 改为可配置：`providers.<name>.max_tokens`（默认 4096）；因为 Claude Messages API 必填该参数。
+- 新增：Claude `max_tokens` 为必填（Claude Messages API 要求），无代码级默认值；OpenAI 兼容类型 `max_tokens` 可选。
+- 新增：所有 provider（含 `[titles]`）支持 `headers` 字段，透传到 SDK 的 `default_headers`，用于自定义 User-Agent 等。
+- 增强：`providers.<name>.api_base` 对 Claude 也生效（映射到 Anthropic SDK `base_url`），便于使用自建/代理端点。
+- 新增：`[titles]` 为独立的完整 provider 配置（type/api_base/api_key/model/max_tokens/headers），不引用已有 provider。
+- 新增：会话标题（可选）：支持在 `config.toml` 配置 `[titles]` + 专用 provider/model；新会话首轮对话后自动生成一次标题；支持 `/retitle` 手动重生（默认当前会话）。
+- 新增：标题生成遇到瞬时错误（例如 429/5xx/网络超时）自动重试（0/3/15/60s）；最终失败仅告警日志，不影响聊天。
+- 新增：`/history` 显示 `#1..#20` 序号（映射到真实 session id），输出简化为 `#<n> YYYY-MM-DD <title>`（本地时间，时区来自 `general.timezone`）；`/resume` `/del_history` `/retitle` 均使用 `#<n>`。
+
