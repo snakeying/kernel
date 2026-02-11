@@ -1,4 +1,5 @@
 config.toml
+SOUL.md
 data/
 .venv/
 __pycache__/

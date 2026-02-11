@@ -57,7 +57,7 @@ models = ["claude-sonnet-4-5-20250929", "claude-opus-4-6"]
 
 [cli.claude_code]
 command = "claude"
-args = ["-p", "--output-format", "text"]
+args = ["-p", "--output-format", "text", "--permission-mode", "bypassPermissions"]
 
 [cli.codex]
 command = "codex"
