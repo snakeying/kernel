@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import base64
+import html
 import logging
 import re
 import time
@@ -25,6 +26,23 @@ def _mask_sensitive(text: str) -> str:
     for pattern, repl in _SENSITIVE_PATTERNS:
         text = pattern.sub(repl, text)
     return text
+_TTS_PRE_RE = re.compile('<pre(?:\\s[^>]*)?>.*?</pre>', re.IGNORECASE | re.DOTALL)
+_TTS_TAG_RE = re.compile('<[^>]+>')
+_TTS_COLON_EMOJI_RE = re.compile(':[A-Za-z][A-Za-z0-9_+-]{1,}:')
+_TTS_UNICODE_EMOJI_RE = re.compile('[\\U0001F1E6-\\U0001F1FF\\U0001F300-\\U0001F5FF\\U0001F600-\\U0001F64F\\U0001F680-\\U0001F6FF\\U0001F900-\\U0001F9FF\\U0001FA70-\\U0001FAFF\\u2600-\\u26FF\\u2700-\\u27BF]')
+
+def _to_tts_text(markdown: str) -> str:
+    html_text = md_to_tg_html(markdown)
+    html_text = _TTS_PRE_RE.sub('\n代码略\n', html_text)
+    text = _TTS_TAG_RE.sub('', html_text)
+    text = html.unescape(text)
+    text = _TTS_COLON_EMOJI_RE.sub('', text)
+    text = _TTS_UNICODE_EMOJI_RE.sub('', text)
+    text = text.replace('\ufe0f', '').replace('\u200d', '').replace('\u20e3', '')
+    text = text.replace('• ', '').replace('▍ ', '')
+    text = re.sub('[ \\t]+', ' ', text)
+    text = re.sub('\\n{3,}', '\\n\\n', text)
+    return text.strip()
 _MAX_FILE_SIZE = 20 * 1024 * 1024
 _MAX_TEXT_CHARS = 50000
 _TEXT_EXTENSIONS: set[str] = {'.txt', '.md', '.markdown', '.rst', '.py', '.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.html', '.htm', '.css', '.scss', '.less', '.svg', '.sh', '.bash', '.zsh', '.bat', '.cmd', '.ps1', '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.java', '.kt', '.kts', '.scala', '.groovy', '.go', '.rs', '.rb', '.php', '.pl', '.lua', '.r', '.R', '.jl', '.swift', '.m', '.mm', '.sql', '.graphql', '.gql', '.xml', '.csv', '.tsv', '.log', '.env', '.gitignore', '.dockerignore', '.dockerfile', '.makefile', '.tf', '.hcl', '.vue', '.svelte'}
@@ -487,18 +505,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await state.agent.maybe_generate_title()
         if state._last_message_was_voice and state.tts:
             state._last_message_was_voice = False
+            voice_path: Path | None = None
             try:
+                speak_text = _to_tts_text(full_text)
+                if not speak_text:
+                    speak_text = '代码略'
                 voice_dir = state.config.data_path / 'voice_replies'
                 voice_dir.mkdir(parents=True, exist_ok=True)
                 voice_path = voice_dir / f'{msg.message_id}.ogg'
-                await state.tts.synthesize(full_text, voice_path)
+                await state.tts.synthesize(speak_text, voice_path)
                 chat_id = update.effective_chat.id
                 with open(voice_path, 'rb') as vf:
                     await update.get_bot().send_voice(chat_id=chat_id, voice=vf)
-                voice_path.unlink(missing_ok=True)
-                return
             except Exception as exc:
                 log.warning('TTS failed, falling back to text: %s', exc)
+            finally:
+                if voice_path:
+                    voice_path.unlink(missing_ok=True)
         if msg and (not msg.voice):
             state._last_message_was_voice = False
         try:

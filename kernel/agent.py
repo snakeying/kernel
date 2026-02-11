@@ -123,7 +123,7 @@ class Agent:
 
     def _register_builtin_tools(self) -> None:
 
-        @self._registry.tool('delegate_to_cli', description='当用户需要执行文件操作、代码编辑、项目分析、Shell 命令、浏览器操作等实际任务时使用。将任务委派给 CLI Agent（Claude Code 或 Codex）执行。')
+        @self._registry.tool('delegate_to_cli', description='当用户需要执行文件操作、代码编辑、项目分析、Shell 命令、浏览器操作等实际任务时使用。将任务委派给 CLI Agent（Claude Code 或 Codex）执行。默认在 tasks/ 目录下运行；如需在指定目录运行请传入 cwd。')
         async def delegate_to_cli(task: str, cwd: str | None=None, cli: str | None=None) -> dict[str, Any]:
             return await self._handle_delegate_to_cli(task, cwd, cli)
 
@@ -174,7 +174,14 @@ class Agent:
         if agent is None:
             available = ', '.join(self._cli_agents.keys()) or 'none'
             return {'ok': False, 'error': f"CLI '{cli_name}' not configured. Available: {available}"}
-        work_dir = cwd or str(self.config.default_workspace_path)
+        if cwd:
+            work_dir = cwd
+        else:
+            tasks_dir = self.config.default_workspace_path
+            if tasks_dir.name.lower() != 'tasks':
+                tasks_dir = tasks_dir / 'tasks'
+            tasks_dir.mkdir(parents=True, exist_ok=True)
+            work_dir = str(tasks_dir)
         self._active_cli = agent
         try:
             result = await agent.run(task, work_dir)
