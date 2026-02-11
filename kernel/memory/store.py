@@ -8,6 +8,7 @@ Schema
 History slimming:
 - Phase 1: image base64 → ``[图片已处理]``
 - Phase 2: tool_result content → one-line summary + artifact path
+- Phase 3: file content → ``[文件 xxx.py 已处理]``
 """
 
 from __future__ import annotations
@@ -245,6 +246,15 @@ class Store:
             if btype == "image":
                 slimmed.append({"type": "text", "text": "[图片已处理]"})
                 continue
+
+            # File content slimming (Phase 3)
+            if btype == "text":
+                text = block.get("text", "")
+                if text.startswith("[文件: ") and "\n```\n" in text:
+                    # Extract filename from "[文件: xxx.py]\n```\n...\n```"
+                    fname = text.split("]", 1)[0].removeprefix("[文件: ")
+                    slimmed.append({"type": "text", "text": f"[文件 {fname} 已处理]"})
+                    continue
 
             # Tool result slimming (Phase 2)
             if btype == "tool_result":

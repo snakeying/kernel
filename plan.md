@@ -493,3 +493,23 @@ headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }  # 示例：从环境变�
 - 文件最大 20MB，提取文本截断到 50K 字符。
 - 历史瘦身：文件内容替换为 `[文件 xxx.py 已处理]`。
 
+## Phase 3
+
+### 决策记录
+- 文件类型判断基于扩展名白名单（`_TEXT_EXTENSIONS`）+ 黑名单（`_UNSUPPORTED_EXTENSIONS`）；无扩展名的已知文件（Makefile/Dockerfile 等）也支持。
+- 不在白名单也不在黑名单的未知扩展名：拒绝并提示，避免误读二进制文件。
+- 文件内容格式化为 `[文件: {filename}]\n```\n{text}\n```` 传给 LLM，便于 LLM 识别文件边界。
+- 历史瘦身匹配 `[文件: ` 前缀 + `` \n```\n `` 标记，提取文件名后替换为 `[文件 xxx.py 已处理]`。
+- 下载路径：`data_dir/downloads/{file_unique_id}_{filename}`，使用 TG 的 `file_unique_id` 避免重名。
+- `_extract_file_text` 使用同步 `read_text`（文件已在本地磁盘，I/O 极快，无需 async）。
+
+### 实现要点
+- `filters.Document.ALL` 加入消息处理器过滤器（与 `filters.TEXT | filters.PHOTO` 并列）。
+- 文件处理分支在 `handle_message` 中位于图片处理之后、纯文本之前（`elif msg.document`）。
+- 三种拒绝路径：黑名单扩展名（明确不支持）、未知扩展名（无法识别）、UTF-8 解码失败（非文本）。
+- `downloads/` 目录在 `run_bot()` 启动时预创建，文件处理时也有 `mkdir` 兜底。
+
+### Phase 4 注意事项
+- Phase 4 范围：长期记忆（memory 表 + FTS5 + memory_* 工具 + /remember /memory /forget 命令）。
+- SOUL.md 需加回记忆相关规则（Phase 1 暂时移除）。
+- `agent.py` 需注册 memory_add / memory_search / memory_list / memory_delete 工具。

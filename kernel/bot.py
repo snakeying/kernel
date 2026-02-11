@@ -1,6 +1,6 @@
 """Telegram Bot — message handling, commands, and output formatting.
 
-Handles text/image input, session commands, provider/model switching,
+Handles text/image/file input, session commands, provider/model switching,
 placeholder + final HTML output, busy guard, whitelist, and /cancel.
 """
 
@@ -13,6 +13,7 @@ import re
 import traceback
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -47,6 +48,66 @@ _SENSITIVE_PATTERNS = [
 def _mask_sensitive(text: str) -> str:
     for pattern, repl in _SENSITIVE_PATTERNS:
         text = pattern.sub(repl, text)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# File upload handling
+# ---------------------------------------------------------------------------
+
+_MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
+_MAX_TEXT_CHARS = 50_000
+
+# Extensions treated as UTF-8 text/code files
+_TEXT_EXTENSIONS: set[str] = {
+    ".txt", ".md", ".markdown", ".rst",
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs",
+    ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+    ".html", ".htm", ".css", ".scss", ".less", ".svg",
+    ".sh", ".bash", ".zsh", ".bat", ".cmd", ".ps1",
+    ".c", ".h", ".cpp", ".hpp", ".cc", ".cxx",
+    ".java", ".kt", ".kts", ".scala", ".groovy",
+    ".go", ".rs", ".rb", ".php", ".pl", ".lua",
+    ".r", ".R", ".jl", ".swift", ".m", ".mm",
+    ".sql", ".graphql", ".gql",
+    ".xml", ".csv", ".tsv", ".log",
+    ".env", ".gitignore", ".dockerignore",
+    ".dockerfile", ".makefile",
+    ".tf", ".hcl", ".vue", ".svelte",
+}
+
+# Extensions we explicitly reject with a message
+_UNSUPPORTED_EXTENSIONS: set[str] = {
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".odt", ".ods", ".odp", ".rtf",
+    ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar",
+    ".exe", ".dll", ".so", ".dylib", ".bin",
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".tiff",
+    ".mp3", ".mp4", ".avi", ".mkv", ".wav", ".flac", ".ogg",
+}
+
+
+def _is_text_file(filename: str) -> bool | None:
+    """Return True if text, False if explicitly unsupported, None if unknown."""
+    ext = Path(filename).suffix.lower()
+    # Files without extension or named like Makefile/Dockerfile
+    if not ext:
+        basename = Path(filename).name.lower()
+        if basename in ("makefile", "dockerfile", "vagrantfile", "gemfile", "rakefile", "procfile"):
+            return True
+        return None
+    if ext in _TEXT_EXTENSIONS:
+        return True
+    if ext in _UNSUPPORTED_EXTENSIONS:
+        return False
+    return None
+
+
+async def _extract_file_text(file_path: Path) -> str:
+    """Read a file as UTF-8 text, truncating to _MAX_TEXT_CHARS."""
+    text = file_path.read_text(encoding="utf-8")
+    if len(text) > _MAX_TEXT_CHARS:
+        text = text[:_MAX_TEXT_CHARS] + f"\n\n[… 截断，共 {len(text)} 字符]"
     return text
 
 
@@ -360,7 +421,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 # ---------------------------------------------------------------------------
-# Message handler — text & images
+# Message handler — text, images & files
 # ---------------------------------------------------------------------------
 
 
@@ -402,6 +463,66 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
             b64 = base64.b64encode(img_bytes).decode("ascii")
             content_blocks.append(ImageContent(media_type="image/jpeg", data=b64))
+            if msg.caption:
+                content_blocks.append(TextContent(text=msg.caption))
+
+        # Document/file handling
+        elif msg and msg.document:
+            doc = msg.document
+            filename = doc.file_name or "unknown"
+
+            # Check file type
+            supported = _is_text_file(filename)
+            if supported is False:
+                ext = Path(filename).suffix.lower()
+                await _send_text(
+                    update,
+                    f"不支持的文件类型：{ext}\n目前仅支持文本和代码文件（UTF-8）。",
+                    parse_mode=None,
+                )
+                return
+            if supported is None:
+                await _send_text(
+                    update,
+                    f"无法识别的文件类型：{filename}\n目前仅支持文本和代码文件（UTF-8）。",
+                    parse_mode=None,
+                )
+                return
+
+            # Check size
+            if doc.file_size and doc.file_size > _MAX_FILE_SIZE:
+                await _send_text(update, "文件超过 20MB，无法处理。", parse_mode=None)
+                return
+
+            # Download
+            downloads_dir = state.config.data_path / "downloads"
+            downloads_dir.mkdir(parents=True, exist_ok=True)
+            file = await doc.get_file()
+            local_path = downloads_dir / f"{file.file_unique_id}_{filename}"
+            await file.download_to_drive(str(local_path))
+
+            # Extract text
+            try:
+                text = await _extract_file_text(local_path)
+            except UnicodeDecodeError:
+                await _send_text(
+                    update,
+                    f"文件 {filename} 不是有效的 UTF-8 文本，无法处理。",
+                    parse_mode=None,
+                )
+                return
+            except Exception as exc:
+                log.warning("File read failed: %s", exc)
+                await _send_text(
+                    update,
+                    f"读取文件 {filename} 失败：{exc}",
+                    parse_mode=None,
+                )
+                return
+
+            content_blocks.append(TextContent(
+                text=f"[文件: {filename}]\n```\n{text}\n```"
+            ))
             if msg.caption:
                 content_blocks.append(TextContent(text=msg.caption))
 
@@ -540,6 +661,7 @@ async def run_bot() -> None:
 
     # Ensure data dirs
     (config.data_path / "cli_outputs").mkdir(parents=True, exist_ok=True)
+    (config.data_path / "downloads").mkdir(parents=True, exist_ok=True)
 
     state = BotState(config, agent, store)
 
@@ -566,9 +688,9 @@ async def run_bot() -> None:
     app.add_handler(CommandHandler("cancel", cmd_cancel))
     app.add_handler(CommandHandler("status", cmd_status))
 
-    # Message handler — text and photos (private chat only)
+    # Message handler — text, photos, and documents (private chat only)
     app.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & (filters.TEXT | filters.PHOTO) & ~filters.COMMAND,
+        filters.ChatType.PRIVATE & (filters.TEXT | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,
         handle_message,
     ))
 
