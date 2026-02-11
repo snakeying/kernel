@@ -423,8 +423,8 @@ headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }  # 示例：从环境变�
 | `/provider [name]` | 查看/切换当前 provider |
 | `/model [name]` | 查看/切换当前 provider 下的模型 |
 | `/remember <text>` | 手动存入长期记忆 |
-| `/memory` | 查看所有长期记忆 |
-| `/forget <id>` | 删除指定记忆 |
+| `/memory` | 查看所有长期记忆（显示 `#<n>` 序号 + 日期 + 内容） |
+| `/forget #<n>[/#n2/...]` | 删除一个或多个记忆（先 `/memory`） |
 | `/reminders` | 查看所有待触发的提醒 |
 | `/del_reminder <id>` | 取消指定提醒 |
 | `/cancel` | 取消当前任务（中断 streaming + tool loop + CLI） |
@@ -534,7 +534,7 @@ headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }  # 示例：从环境变�
 - `agent._build_system_prompt` 改为 `async`，接收 `user_query` 参数；先搜索召回，搜不到则注入最近 top-k（`config.general.memory_recall_k`，默认 5），注入格式 `## 长期记忆（自动召回）\n- [id] text`。
 - memory 工具注册：`memory_add`/`memory_search`/`memory_list`/`memory_delete` 四个工具通过 `ToolRegistry` 装饰器注册，LLM 可自主调用。
 - `/remember <text>` 直接调用 `store.memory_add`，不经过 LLM。
-- `/memory` 列出所有记忆（id + date + text）。`/forget <id>` 删除指定记忆。
+- `/memory` 显示 `#<n>` 序号 + 日期 + 内容（同 `/history` 的序号映射模式）。`/forget #<n>[/#n2/...]` 支持批量删除（先 `/memory` 查看序号）。
 - `/status` 新增 FTS5 状态行。
 - SOUL.md 已去掉 memory 工具规则中的"（Phase 4 启用）"标注。
 
