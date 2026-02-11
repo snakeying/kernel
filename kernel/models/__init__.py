@@ -1,1 +1,5 @@
-from kernel.models.base import ContentBlock, ImageContent, LLM, LLMResponse, Message, Role, StreamChunk, TextContent, ToolDef, ToolResultContent, ToolUseContent
+"""Model protocol and content block types.
+
+Most code imports from `kernel.models.base` directly.
+"""
+
