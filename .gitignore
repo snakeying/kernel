@@ -12,3 +12,4 @@ build/
 *.log
 .playwright-mcp/
 tasks/
+plan.md
