@@ -20,12 +20,22 @@ from kernel.render import md_to_tg_html, split_tg_message
 from kernel.voice.stt import STTClient
 from kernel.voice.tts import TTSClient
 log = logging.getLogger(__name__)
-_SENSITIVE_PATTERNS = [(re.compile('(sk-ant-[A-Za-z0-9]{4})[A-Za-z0-9-]+([A-Za-z0-9]{4})'), '\\1…\\2'), (re.compile('(sk-[A-Za-z0-9]{4})[A-Za-z0-9-]+([A-Za-z0-9]{4})'), '\\1…\\2'), (re.compile('(\\d{8,12}):\\w{30,}'), '[TG_TOKEN_REDACTED]')]
+_SENSITIVE_PATTERNS = [
+    (re.compile(r'(sk-ant-[A-Za-z0-9]{4})[A-Za-z0-9-]+([A-Za-z0-9]{4})'), r'\1…\2'),
+    (re.compile(r'(sk-[A-Za-z0-9]{4})[A-Za-z0-9-]+([A-Za-z0-9]{4})'), r'\1…\2'),
+    # Telegram bot token appears in URLs as: bot<id>:<token>. Token may contain "_" and "-".
+    (re.compile(r'(\d{8,12}):[A-Za-z0-9_-]{30,}'), '[TG_TOKEN_REDACTED]'),
+]
 
 def _mask_sensitive(text: str) -> str:
     for pattern, repl in _SENSITIVE_PATTERNS:
         text = pattern.sub(repl, text)
     return text
+
+class MaskingFormatter(logging.Formatter):
+
+    def format(self, record: logging.LogRecord) -> str:
+        return _mask_sensitive(super().format(record))
 _TTS_PRE_RE = re.compile('<pre(?:\\s[^>]*)?>.*?</pre>', re.IGNORECASE | re.DOTALL)
 _TTS_TAG_RE = re.compile('<[^>]+>')
 _TTS_COLON_EMOJI_RE = re.compile(':[A-Za-z][A-Za-z0-9_+-]{1,}:')
@@ -47,6 +57,24 @@ _MAX_FILE_SIZE = 20 * 1024 * 1024
 _MAX_TEXT_CHARS = 50000
 _TEXT_EXTENSIONS: set[str] = {'.txt', '.md', '.markdown', '.rst', '.py', '.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.html', '.htm', '.css', '.scss', '.less', '.svg', '.sh', '.bash', '.zsh', '.bat', '.cmd', '.ps1', '.c', '.h', '.cpp', '.hpp', '.cc', '.cxx', '.java', '.kt', '.kts', '.scala', '.groovy', '.go', '.rs', '.rb', '.php', '.pl', '.lua', '.r', '.R', '.jl', '.swift', '.m', '.mm', '.sql', '.graphql', '.gql', '.xml', '.csv', '.tsv', '.log', '.env', '.gitignore', '.dockerignore', '.dockerfile', '.makefile', '.tf', '.hcl', '.vue', '.svelte'}
 _UNSUPPORTED_EXTENSIONS: set[str] = {'.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp', '.rtf', '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar', '.exe', '.dll', '.so', '.dylib', '.bin', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.ico', '.tiff', '.mp3', '.mp4', '.avi', '.mkv', '.wav', '.flac', '.ogg'}
+_INVALID_FILENAME_CHARS_RE = re.compile('[<>:"/\\\\|?*\\x00-\\x1F]')
+_MAX_FILENAME_LEN = 120
+
+def _sanitize_filename(filename: str) -> str:
+    # Keep just the filename (no directories) and make it Windows-safe.
+    name = Path(filename).name
+    name = _INVALID_FILENAME_CHARS_RE.sub('_', name)
+    name = name.strip().strip('.')
+    if not name:
+        return 'file'
+    if len(name) > _MAX_FILENAME_LEN:
+        p = Path(name)
+        suffix = p.suffix
+        keep = _MAX_FILENAME_LEN - len(suffix)
+        if keep < 1:
+            return name[:_MAX_FILENAME_LEN]
+        name = p.stem[:keep] + suffix
+    return name
 
 def _is_text_file(filename: str) -> bool | None:
     ext = Path(filename).suffix.lower()
@@ -178,7 +206,7 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     lines: list[str] = []
     for n, sid in sorted(hmap.items()):
         s = next((s for s in sessions if s['id'] == sid))
-        title = s['title'] or '无标题'
+        title = html.escape(s['title'] or '无标题')
         date = state.format_dt(s['updated_at'])
         current = ' ← 当前' if sid == state.agent.session_id else ''
         lines.append(f'<b>#{n}</b> {date} {title}{current}')
@@ -342,7 +370,7 @@ async def cmd_memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     for n, mid in sorted(mmap.items()):
         m = next((m for m in memories if m['id'] == mid))
         date = state.format_dt(m['created_at'])
-        lines.append(f"<b>#{n}</b> {date} {m['text']}")
+        lines.append(f"<b>#{n}</b> {date} {html.escape(m['text'])}")
     await _send_text(update, '\n'.join(lines))
 
 async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -387,6 +415,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     state.busy = True
     state.busy_notified = False
+    state._chat_task = asyncio.current_task()
     try:
         from kernel.models.base import ImageContent, TextContent
         content_blocks: list[Any] = []
@@ -403,8 +432,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             downloads_dir.mkdir(parents=True, exist_ok=True)
             file = await voice.get_file()
             local_path = downloads_dir / f'{file.file_unique_id}.ogg'
-            await file.download_to_drive(str(local_path))
             try:
+                await file.download_to_drive(str(local_path))
                 text = await state.stt.transcribe(local_path)
                 log.info('STT transcribed: %s', text[:100])
             except Exception as exc:
@@ -433,7 +462,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 content_blocks.append(TextContent(text=msg.caption))
         elif msg and msg.document:
             doc = msg.document
-            filename = doc.file_name or 'unknown'
+            filename = _sanitize_filename(doc.file_name or 'unknown')
             supported = _is_text_file(filename)
             if supported is False:
                 ext = Path(filename).suffix.lower()
@@ -479,7 +508,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             except asyncio.CancelledError:
                 pass
         typing_task = asyncio.create_task(_keep_typing())
-        state._chat_task = asyncio.current_task()
         try:
             async for chunk in state.agent.chat(user_content):
                 if chunk.text:
@@ -496,7 +524,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await _send_text(update, f'Error: {error_msg}', parse_mode=None)
             return
         finally:
-            state._chat_task = None
             if typing_task:
                 typing_task.cancel()
         full_text = ''.join(text_parts)
@@ -532,6 +559,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             for chunk_text in split_tg_message(full_text):
                 await _send_text(update, chunk_text, parse_mode=None)
     finally:
+        state._chat_task = None
         state.busy = False
 
 async def _post_init(app: Application) -> None:
@@ -543,8 +571,13 @@ def _setup_logging(config: Config) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     from logging.handlers import RotatingFileHandler
     fh = RotatingFileHandler(log_dir / 'kernel.log', maxBytes=10 * 1024 * 1024, backupCount=5, encoding='utf-8')
-    fh.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s'))
-    logging.getLogger().addHandler(fh)
+    fh.setFormatter(MaskingFormatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s'))
+    root = logging.getLogger()
+    root.addHandler(fh)
+
+    # Avoid libraries logging full request URLs (may contain tokens) at INFO.
+    logging.getLogger('httpx').setLevel(logging.WARNING)
+    logging.getLogger('httpcore').setLevel(logging.WARNING)
 
 def _cleanup_old_files(dir_path: Path, *, max_age_days: int) -> int:
     if not dir_path.exists():
@@ -626,10 +659,20 @@ async def run_bot() -> None:
     try:
         cleanup_task = asyncio.create_task(_periodic_cleanup(config.data_path, max_age_days=max_age_days), name='kernel_cleanup')
         log.info('Bot ready — polling …')
+        stop_event = asyncio.Event()
+        try:
+            import signal
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    loop.add_signal_handler(sig, stop_event.set)
+                except NotImplementedError:
+                    pass
+        except Exception:
+            pass
         await app.initialize()
         await app.start()
         await app.updater.start_polling(drop_pending_updates=True)
-        stop_event = asyncio.Event()
         await stop_event.wait()
     except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
         pass

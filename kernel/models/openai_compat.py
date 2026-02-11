@@ -1,10 +1,8 @@
 from __future__ import annotations
 import json
-import logging
 from typing import Any, AsyncIterator
 import openai
 from kernel.models.base import ContentBlock, ImageContent, LLM, LLMResponse, Message, Role, StreamChunk, TextContent, ToolDef, ToolResultContent, ToolUseContent
-log = logging.getLogger(__name__)
 
 def _to_openai_content(blocks: list[ContentBlock] | str) -> str | list[dict[str, Any]]:
     if isinstance(blocks, str):

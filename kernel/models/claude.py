@@ -1,9 +1,7 @@
 from __future__ import annotations
-import logging
 from typing import Any, AsyncIterator
 import anthropic
 from kernel.models.base import ContentBlock, ImageContent, LLM, LLMResponse, Message, Role, StreamChunk, TextContent, ToolDef, ToolResultContent, ToolUseContent
-log = logging.getLogger(__name__)
 
 def _to_anthropic_content(blocks: list[ContentBlock] | str) -> list[dict[str, Any]] | str:
     if isinstance(blocks, str):

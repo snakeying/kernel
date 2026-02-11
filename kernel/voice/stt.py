@@ -1,7 +1,5 @@
-import logging
 from pathlib import Path
 from openai import AsyncOpenAI
-log = logging.getLogger(__name__)
 
 class STTClient:
 

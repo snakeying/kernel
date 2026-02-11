@@ -136,10 +136,9 @@ class Store:
         assert self._db
         sql = 'SELECT id, session_id, role, content, created_at FROM messages WHERE session_id = ? ORDER BY id ASC'
         params: tuple = (session_id,)
-        if limit:
-            sql += ' LIMIT ?'
-            params = (session_id, limit)
-        if limit:
+        if limit is not None:
+            if limit <= 0:
+                return []
             sql = 'SELECT * FROM (  SELECT id, session_id, role, content, created_at   FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT ?) sub ORDER BY id ASC'
             params = (session_id, limit)
         cur = await self._db.execute(sql, params)

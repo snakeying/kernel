@@ -17,6 +17,13 @@ if ! command -v uv &>/dev/null; then
     curl -LsSf https://astral.sh/uv/install.sh | sh
 fi
 
+if ! command -v node &>/dev/null; then
+    curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+    apt-get install -y nodejs
+fi
+
+npx playwright install --with-deps chromium
+
 cd "$APP_DIR"
 sudo -u "$APP_USER" uv sync --frozen --python 3.11
 

@@ -1,10 +1,8 @@
 import asyncio
-import logging
 import tempfile
 from pathlib import Path
 import edge_tts
 import static_ffmpeg
-log = logging.getLogger(__name__)
 
 class TTSClient:
 
