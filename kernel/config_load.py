@@ -96,7 +96,7 @@ def load_config(path: str | Path | None = None) -> Config:
         except ValueError as exc:
             log.warning("Provider %s headers: %s - skipping headers", name, exc)
             headers = None
-    providers[name] = ProviderConfig(
+        providers[name] = ProviderConfig(
             name=name,
             type=ptype,
             api_key=api_key,

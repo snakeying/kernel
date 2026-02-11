@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import aiosqlite
@@ -10,9 +11,50 @@ log = logging.getLogger(__name__)
 
 _FTS_DDL = "CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(text, content='', content_rowid=id);\n"
 
+_TERM_CHAR_RE = re.compile(r'[A-Za-z0-9\u4e00-\u9fff]')
+
 
 def _tokenize(text: str) -> str:
     return ' '.join(jieba.cut_for_search(text))
+
+
+def _fts_terms(query: str) -> list[str]:
+    raw_terms: list[str] = []
+    for t in re.split(r'\s+', query):
+        t = t.strip()
+        if t:
+            raw_terms.append(t)
+    for t in jieba.cut_for_search(query):
+        t = t.strip()
+        if t:
+            raw_terms.append(t)
+
+    filtered = [t for t in raw_terms if _TERM_CHAR_RE.search(t)]
+
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for t in filtered:
+        if t in seen:
+            continue
+        seen.add(t)
+        uniq.append(t)
+
+    if any((len(t) >= 2 for t in uniq)):
+        uniq = [t for t in uniq if len(t) >= 2]
+
+    return uniq[:8]
+
+
+def _quote_fts_term(term: str) -> str:
+    term = term.replace('"', '""')
+    return f'"{term}"'
+
+
+def _fts_or_query(query: str) -> str | None:
+    terms = _fts_terms(query)
+    if len(terms) < 2:
+        return None
+    return ' OR '.join((_quote_fts_term(t) for t in terms))
 
 
 async def try_fts5(db: aiosqlite.Connection) -> bool:
@@ -57,6 +99,15 @@ async def memory_search(db: aiosqlite.Connection, query: str, *, limit: int = 5,
                 return [dict(r) for r in rows]
         except Exception:
             pass
+        or_query = _fts_or_query(query)
+        if or_query:
+            try:
+                cur = await db.execute('SELECT m.id, m.text, m.created_at FROM memories m JOIN memories_fts f ON m.id = f.rowid WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?', (or_query, limit))
+                rows = await cur.fetchall()
+                if rows:
+                    return [dict(r) for r in rows]
+            except Exception:
+                pass
     cur = await db.execute('SELECT id, text, created_at FROM memories WHERE text LIKE ? ORDER BY id DESC LIMIT ?', (f'%{query}%', limit))
     rows = await cur.fetchall()
     return [dict(r) for r in rows]
@@ -77,4 +128,3 @@ async def memory_delete(db: aiosqlite.Connection, memory_id: int, *, fts5_availa
     cur = await db.execute('DELETE FROM memories WHERE id = ?', (memory_id,))
     await db.commit()
     return cur.rowcount > 0
-

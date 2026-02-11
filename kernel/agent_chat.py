@@ -35,17 +35,15 @@ class AgentChatMixin:
             f"## 当前时间\n{now.strftime('%Y-%m-%dT%H:%M:%S%z')}（{self.config.general.timezone}）"
         )
         k = self.config.general.memory_recall_k
-        memories: list[dict] = []
-        try:
-            if user_query:
-                memories = await self.store.memory_search(user_query, limit=k)
-        except Exception:
-            log.debug("Memory recall failed", exc_info=True)
-        if memories:
-            lines = ["## 长期记忆（自动召回）"]
-            for m in memories:
-                lines.append(f"- [{m['id']}] {m['text']}")
-            parts.append("\n".join(lines))
+        if k > 0:
+            parts.append(
+                "## 长期记忆（工具访问）\n"
+                "你可以通过 memory_search / memory_list 访问长期记忆。\n"
+                "在回答前先判断是否需要记忆：当问题可能依赖用户偏好、身份信息、历史约定或长期计划时，优先调用 memory_search。\n"
+                "如果问题明显不依赖长期信息，请不要调用。\n"
+                "query 请用你自己改写后的关键词（名词为主，避免照抄原句）。\n"
+                f"如果 memory_search 结果为空但仍可能相关，再调用 memory_list(limit={k}) 快速浏览。"
+            )
         return "\n\n".join(parts) if parts else ""
 
     async def chat(self, user_content: list[ContentBlock] | str) -> AsyncIterator[StreamChunk]:
