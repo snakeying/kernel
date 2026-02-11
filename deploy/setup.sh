@@ -18,15 +18,14 @@ if ! command -v uv &>/dev/null; then
 fi
 
 cd "$APP_DIR"
-sudo -u "$APP_USER" uv venv .venv --python 3.11
-sudo -u "$APP_USER" uv pip install -e .
+sudo -u "$APP_USER" uv sync --frozen --python 3.11
 
 cp "$APP_DIR/deploy/kernel.service" /etc/systemd/system/kernel.service
 systemctl daemon-reload
 systemctl enable kernel
 
 echo "Setup complete. Next steps:"
-echo "  1. Copy config.toml, SOUL.md, HEARTBEAT.md to $APP_DIR/"
+echo "  1. Copy config.toml, SOUL.md to $APP_DIR/"
 echo "  2. Edit $APP_DIR/config.toml with your tokens/keys"
 echo "  3. systemctl start kernel"
 echo "  4. journalctl -u kernel -f"

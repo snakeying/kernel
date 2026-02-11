@@ -9,7 +9,6 @@ dependencies = [
     "openai>=1.50,<2",
     "mistune>=3,<4",
     "tomli>=2,<3;python_version<'3.12'",
-    "tomli-w>=1,<2",
     "tzdata>=2024.1",
     "aiosqlite>=0.20,<1",
     "mcp>=1.0,<2",

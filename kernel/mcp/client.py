@@ -1,35 +1,43 @@
-"""MCP client — connect to MCP servers, load tools, call tools.
-
-Handles both HTTP (streamable HTTP with SSE fallback) and stdio transports.
-Tools are exposed as ``{server_name}.{tool_name}`` to avoid collisions.
-"""
-
 from __future__ import annotations
-
 import asyncio
-import json
+import hashlib
 import logging
+import re
 from contextlib import AsyncExitStack
 from typing import Any
-
 import httpx
 from mcp import ClientSession, types as mcp_types
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
-
 from kernel.config import MCPServerConfig
 from kernel.models.base import ToolDef
-
 log = logging.getLogger(__name__)
+_INVALID_TOOL_CHAR_RE = re.compile('[^A-Za-z0-9_-]')
+_MAX_TOOL_NAME_LEN = 64
 
-# Exponential backoff for reconnection
-_BACKOFF_BASE = 2.0
-_BACKOFF_MAX = 60.0
-_MAX_RECONNECT_ATTEMPTS = 5
+def _safe_tool_name(server_name: str, tool_name: str) -> str:
+    raw = f'mcp_{server_name}__{tool_name}'
+    safe = _INVALID_TOOL_CHAR_RE.sub('_', raw)
+    if len(safe) <= _MAX_TOOL_NAME_LEN:
+        return safe
+    digest = hashlib.sha1(safe.encode('utf-8')).hexdigest()[:8]
+    keep = _MAX_TOOL_NAME_LEN - (1 + len(digest))
+    return f'{safe[:keep]}_{digest}'
 
+def _dedupe_tool_name(name: str, used: set[str]) -> str:
+    if name not in used:
+        return name
+    digest = hashlib.sha1(name.encode('utf-8')).hexdigest()[:8]
+    keep = _MAX_TOOL_NAME_LEN - (1 + len(digest))
+    candidate = f'{name[:keep]}_{digest}'
+    i = 2
+    while candidate in used:
+        digest = hashlib.sha1(f'{name}_{i}'.encode('utf-8')).hexdigest()[:8]
+        candidate = f'{name[:keep]}_{digest}'
+        i += 1
+    return candidate
 
 class _ServerConnection:
-    """Manages a single MCP server connection."""
 
     def __init__(self, config: MCPServerConfig) -> None:
         self.config = config
@@ -40,86 +48,58 @@ class _ServerConnection:
         self._connected = False
 
     async def connect(self) -> bool:
-        """Establish connection and list tools. Returns True on success."""
         try:
+            await self.close()
             await self._do_connect()
             self._connected = True
-            log.info("MCP [%s] connected — %d tools", self.name, len(self._tools))
+            log.info('MCP [%s] connected — %d tools', self.name, len(self._tools))
             return True
         except Exception:
-            log.warning("MCP [%s] connection failed", self.name, exc_info=True)
-            self._connected = False
+            log.warning('MCP [%s] connection failed', self.name, exc_info=True)
+            await self.close()
             return False
 
     async def _do_connect(self) -> None:
         self._exit_stack = AsyncExitStack()
-
-        if self.config.type == "stdio":
+        if self.config.type == 'stdio':
             if not self.config.command:
                 raise ValueError(f"MCP server '{self.name}' is stdio but has no command")
-            params = StdioServerParameters(
-                command=self.config.command,
-                args=self.config.args or [],
-            )
-            streams = await self._exit_stack.enter_async_context(
-                stdio_client(params)
-            )
-            read, write = streams[0], streams[1]
+            params = StdioServerParameters(command=self.config.command, args=self.config.args or [])
+            streams = await self._exit_stack.enter_async_context(stdio_client(params))
+            read, write = (streams[0], streams[1])
         else:
-            # HTTP (streamable HTTP)
             if not self.config.url:
                 raise ValueError(f"MCP server '{self.name}' is http but has no url")
-
             headers = dict(self.config.headers) if self.config.headers else {}
-            http_client = httpx.AsyncClient(
-                headers=headers,
-                timeout=httpx.Timeout(30, read=300),
-                follow_redirects=True,
-            )
+            http_client = httpx.AsyncClient(headers=headers, timeout=httpx.Timeout(30, read=300), follow_redirects=True)
             await self._exit_stack.enter_async_context(http_client)
-
-            # streamable_http_client may return 2 or 3 values depending on SDK version
-            streams = await self._exit_stack.enter_async_context(
-                streamable_http_client(self.config.url, http_client=http_client)
-            )
-            read, write = streams[0], streams[1]
-
-        self._session = await self._exit_stack.enter_async_context(
-            ClientSession(read, write)
-        )
+            streams = await self._exit_stack.enter_async_context(streamable_http_client(self.config.url, http_client=http_client))
+            read, write = (streams[0], streams[1])
+        self._session = await self._exit_stack.enter_async_context(ClientSession(read, write))
         await self._session.initialize()
-
-        # List tools
         result = await self._session.list_tools()
         self._tools = list(result.tools)
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> str:
-        """Call a tool on this server. Returns text result."""
         if not self._session or not self._connected:
             raise RuntimeError(f"MCP server '{self.name}' is not connected")
-
         try:
             result = await self._session.call_tool(tool_name, arguments=arguments)
         except Exception:
-            # Connection might be dead — mark as disconnected
             self._connected = False
             raise
-
-        # Extract text from result content
         parts: list[str] = []
         if result.content:
             for block in result.content:
                 if isinstance(block, mcp_types.TextContent):
                     parts.append(block.text)
-                elif hasattr(block, "text"):
+                elif hasattr(block, 'text'):
                     parts.append(str(block.text))
                 else:
                     parts.append(str(block))
-
-        text = "\n".join(parts) if parts else "(no output)"
-
+        text = '\n'.join(parts) if parts else '(no output)'
         if result.isError:
-            return f"Error: {text}"
+            return f'Error: {text}'
         return text
 
     @property
@@ -137,94 +117,78 @@ class _ServerConnection:
             try:
                 await self._exit_stack.aclose()
             except Exception:
-                log.debug("Error closing MCP [%s]", self.name, exc_info=True)
+                log.debug('Error closing MCP [%s]', self.name, exc_info=True)
             self._exit_stack = None
 
-
-def _mcp_tool_to_tooldef(server_name: str, tool: mcp_types.Tool) -> ToolDef:
-    """Convert an MCP tool to our internal ToolDef."""
-    name = f"{server_name}.{tool.name}"
-    description = tool.description or f"{server_name}/{tool.name}"
-    # MCP tool inputSchema is already a JSON Schema object
-    parameters = tool.inputSchema if isinstance(tool.inputSchema, dict) else {"type": "object", "properties": {}}
-    return ToolDef(name=name, description=description, parameters=parameters)
-
-
 class MCPClient:
-    """Manages connections to multiple MCP servers."""
 
     def __init__(self, configs: list[MCPServerConfig]) -> None:
         self._configs = configs
         self._connections: dict[str, _ServerConnection] = {}
-        self._reconnect_tasks: dict[str, asyncio.Task] = {}
+        self._tool_map: dict[str, tuple[str, str]] = {}
 
     async def connect_all(self) -> None:
-        """Connect to all configured MCP servers. Failures are logged, not raised."""
         for cfg in self._configs:
             conn = _ServerConnection(cfg)
             self._connections[cfg.name] = conn
             ok = await conn.connect()
             if not ok:
-                log.warning("MCP [%s] skipped — connection failed", cfg.name)
+                log.warning('MCP [%s] skipped — connection failed', cfg.name)
 
     def get_tool_defs(self) -> dict[str, ToolDef]:
-        """Return all tool definitions from connected servers."""
+        self._tool_map.clear()
         defs: dict[str, ToolDef] = {}
+        used: set[str] = set()
         for conn in self._connections.values():
             if not conn.connected:
                 continue
             for tool in conn.tools:
-                td = _mcp_tool_to_tooldef(conn.name, tool)
-                defs[td.name] = td
+                safe_name = _safe_tool_name(conn.name, tool.name)
+                safe_name = _dedupe_tool_name(safe_name, used)
+                used.add(safe_name)
+                description = tool.description or f'{conn.name}/{tool.name}'
+                description = f'[{conn.name}.{tool.name}] {description}'
+                parameters = tool.inputSchema if isinstance(tool.inputSchema, dict) else {'type': 'object', 'properties': {}}
+                self._tool_map[safe_name] = (conn.name, tool.name)
+                defs[safe_name] = ToolDef(name=safe_name, description=description, parameters=parameters)
         return defs
 
     async def call_tool(self, qualified_name: str, arguments: dict[str, Any]) -> str:
-        """Call a tool by its qualified name (``server.tool_name``).
-
-        If the server is disconnected, attempts one reconnection before failing.
-        """
-        dot = qualified_name.find(".")
-        if dot < 0:
-            return f"Error: invalid tool name '{qualified_name}' (expected server.tool)"
-        server_name = qualified_name[:dot]
-        tool_name = qualified_name[dot + 1:]
-
+        server_name: str
+        tool_name: str
+        if '.' in qualified_name:
+            dot = qualified_name.find('.')
+            server_name = qualified_name[:dot]
+            tool_name = qualified_name[dot + 1:]
+        else:
+            mapped = self._tool_map.get(qualified_name)
+            if not mapped:
+                return f"Error: unknown MCP tool '{qualified_name}'"
+            server_name, tool_name = mapped
         conn = self._connections.get(server_name)
         if conn is None:
             return f"Error: MCP server '{server_name}' not configured"
-
-        # Try call; on failure, reconnect once and retry
         for attempt in range(2):
             if not conn.connected and attempt == 0:
-                log.info("MCP [%s] reconnecting …", server_name)
+                log.info('MCP [%s] reconnecting …', server_name)
                 ok = await conn.connect()
                 if not ok:
                     return f"Error: MCP server '{server_name}' reconnection failed"
-
             try:
                 return await conn.call_tool(tool_name, arguments)
             except Exception as exc:
                 if attempt == 0:
-                    log.warning(
-                        "MCP [%s] tool call failed, will reconnect: %s",
-                        server_name, exc,
-                    )
+                    log.warning('MCP [%s] tool call failed, will reconnect: %s', server_name, exc)
                     await conn.close()
                     ok = await conn.connect()
                     if not ok:
                         return f"Error: MCP server '{server_name}' reconnection failed"
                 else:
-                    log.error("MCP [%s] tool call failed after reconnect", server_name, exc_info=True)
-                    return f"Error calling {qualified_name}: {exc}"
-
-        return f"Error: unexpected failure calling {qualified_name}"
+                    log.error('MCP [%s] tool call failed after reconnect', server_name, exc_info=True)
+                    return f'Error calling {qualified_name}: {exc}'
+        return f'Error: unexpected failure calling {qualified_name}'
 
     async def close(self) -> None:
-        """Close all server connections."""
-        for task in self._reconnect_tasks.values():
-            task.cancel()
-        self._reconnect_tasks.clear()
-
         for conn in self._connections.values():
             await conn.close()
         self._connections.clear()

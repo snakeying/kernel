@@ -152,7 +152,7 @@ class LLM(ABC):
 ### MCP Client
 - Kernel 作为 MCP client，启动时连接 config.toml 中配置的 MCP servers
 - servers 支持两种形态：http（url + 可选 headers）与 stdio（command + args）
-- 将 MCP tools 转换为 LLM tool use 格式，以 `{server_name}.{tool_name}` 命名避免重名，动态注册
+- 将 MCP tools 转换为 LLM tool use 格式，以 `mcp_{server}__{tool}` 命名避免重名（同时满足 LLM tool/function 命名约束），动态注册
 - LLM 可直接调用 MCP tools（exa 搜索、context7 文档查询等）
 - 用户可在 config.toml 中自由添加/移除 MCP servers
 - 启动时连接失败：跳过该 server，不阻塞启动
@@ -440,7 +440,7 @@ headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }  # 示例：从环境变�
 - `cli/base.py`：`CLIAgent` 抽象基类，`run()` 方法通过 `asyncio.create_subprocess_exec` 执行子进程，统一处理超时（10min）、取消、输出落盘（`data_dir/cli_outputs/`）、50K 字符截断（头尾保留）。`CLIResult` 数据类包含 `ok/cli_name/cwd/exit_code/output_path/output`。
 - `cli/claude_code.py`：`build_command` = `[command, *args, task]`；输出取自 stdout。
 - `cli/codex.py`：`build_command` 运行时追加 `-C <cwd>` + `--output-last-message <output_path>` + task；输出优先从 `--output-last-message` 文件读取，fallback 到 stdout。
-- `mcp/client.py`：使用 `contextlib.AsyncExitStack` 保持 `streamable_http_client` / `stdio_client` + `ClientSession` 上下文存活。工具命名 `{server_name}.{tool_name}`。连接失败跳过不阻塞启动。工具调用失败自动重连一次再重试。
+- `mcp/client.py`：使用 `contextlib.AsyncExitStack` 保持 `streamable_http_client` / `stdio_client` + `ClientSession` 上下文存活。工具命名 `mcp_{server}__{tool}`（安全字符）。连接失败跳过不阻塞启动。工具调用失败自动重连一次再重试。
 - `agent.py` 集成：`__init__` 中注册 `delegate_to_cli` 内置工具；`init_mcp()` 异步方法连接 MCP 并注册工具；MCP 工具通过闭包绑定 `qualified_name` 并路由到 `MCPClient.call_tool()`。
 - `agent.cancel()` 现在同时 kill 正在运行的 CLI 子进程（`asyncio.create_task(self._active_cli.kill())`）。
 - `bot.py`：当 `delegate_to_cli` 工具执行时发送 "⏳ 正在执行任务…" 等待提示；`/cancel` 显示被终止的 CLI 名称；`/status` 新增 CLI 运行状态行。
