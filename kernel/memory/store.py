@@ -1,9 +1,11 @@
-"""SQLite session/message storage with history slimming.
+"""SQLite session/message storage, long-term memory with FTS5, and history slimming.
 
 Schema
 ------
 - ``sessions``  — one row per conversation session
 - ``messages``  — ordered messages within a session (stored as JSON)
+- ``memories``  — long-term memory entries
+- ``memories_fts`` — FTS5 virtual table for full-text search (if available)
 
 History slimming:
 - Phase 1: image base64 → ``[图片已处理]``
@@ -23,7 +25,7 @@ import aiosqlite
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _DDL = """\
 CREATE TABLE IF NOT EXISTS sessions (
@@ -47,15 +49,37 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS memories (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    text        TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+"""
+
+_FTS_DDL = """\
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(text, content=memories, content_rowid=id);
+
+CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+    INSERT INTO memories_fts(rowid, text) VALUES (new.id, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+    INSERT INTO memories_fts(memories_fts, rowid, text) VALUES ('delete', old.id, old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+    INSERT INTO memories_fts(memories_fts, rowid, text) VALUES ('delete', old.id, old.text);
+    INSERT INTO memories_fts(rowid, text) VALUES (new.id, new.text);
+END;
 """
 
 
 class Store:
-    """Async SQLite store for sessions and messages."""
+    """Async SQLite store for sessions, messages, and long-term memory."""
 
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
         self._db: aiosqlite.Connection | None = None
+        self.fts5_available: bool = False
 
     async def init(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,9 +96,39 @@ class Store:
         version = row[0] if row else 0
         if version < SCHEMA_VERSION:
             await self._db.executescript(_DDL)
+            # Try FTS5
+            self.fts5_available = await self._try_fts5()
             await self._db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self._db.commit()
-            log.info("Database migrated to version %d", SCHEMA_VERSION)
+            log.info("Database migrated to version %d (FTS5=%s)", SCHEMA_VERSION, self.fts5_available)
+        else:
+            self.fts5_available = await self._check_fts5_exists()
+
+    async def _try_fts5(self) -> bool:
+        """Try to create FTS5 virtual table. Returns True on success."""
+        assert self._db
+        try:
+            await self._db.executescript(_FTS_DDL)
+            # Rebuild index from existing data
+            await self._db.execute(
+                "INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')"
+            )
+            await self._db.commit()
+            return True
+        except Exception as exc:
+            log.warning("FTS5 not available, falling back to LIKE: %s", exc)
+            return False
+
+    async def _check_fts5_exists(self) -> bool:
+        """Check if memories_fts table exists (for already-migrated DBs)."""
+        assert self._db
+        try:
+            cur = await self._db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memories_fts'"
+            )
+            return (await cur.fetchone()) is not None
+        except Exception:
+            return False
 
     async def close(self) -> None:
         if self._db:
@@ -219,6 +273,47 @@ class Store:
         )
         row = await cur.fetchone()
         return row[0] if row else 0
+
+    # -- Memories --------------------------------------------------------
+
+    async def memory_add(self, text: str) -> int:
+        assert self._db
+        cur = await self._db.execute("INSERT INTO memories (text) VALUES (?)", (text,))
+        await self._db.commit()
+        return cur.lastrowid  # type: ignore[return-value]
+
+    async def memory_search(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        assert self._db
+        if self.fts5_available:
+            cur = await self._db.execute(
+                "SELECT m.id, m.text, m.created_at FROM memories m "
+                "JOIN memories_fts f ON m.id = f.rowid "
+                "WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?",
+                (query, limit),
+            )
+        else:
+            cur = await self._db.execute(
+                "SELECT id, text, created_at FROM memories "
+                "WHERE text LIKE ? ORDER BY id DESC LIMIT ?",
+                (f"%{query}%", limit),
+            )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def memory_list(self, limit: int = 200) -> list[dict[str, Any]]:
+        assert self._db
+        cur = await self._db.execute(
+            "SELECT id, text, created_at FROM memories ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def memory_delete(self, memory_id: int) -> bool:
+        assert self._db
+        cur = await self._db.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+        await self._db.commit()
+        return cur.rowcount > 0
 
     # -- History slimming ------------------------------------------------
 

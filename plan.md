@@ -521,3 +521,29 @@ headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }  # 示例：从环境变�
 
 ### 验证结果
 - 全部 12 项测试通过 ✓
+
+## Phase 4
+
+### 决策记录
+- `memories` 表：`id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, created_at TEXT`。
+- FTS5：`memories_fts` 虚拟表（`content=memories, content_rowid=id`）+ 三个触发器（INSERT/DELETE/UPDATE 同步）。启动时 `_try_fts5()` 检测；失败则 `fts5_available=False`，`memory_search` 退化为 `LIKE %query%`。
+- 已迁移 DB 不重新创建 FTS5：`_check_fts5_exists()` 检查 `sqlite_master`。
+- Schema 版本 2 → 3。
+- `agent._build_system_prompt` 改为 `async`，接收 `user_query` 参数；用最近一条 user message 做 FTS5 召回 top-k（`config.general.memory_recall_k`，默认 5），注入格式 `## 长期记忆（自动召回）\n- [id] text`。
+- memory 工具注册：`memory_add`/`memory_search`/`memory_list`/`memory_delete` 四个工具通过 `ToolRegistry` 装饰器注册，LLM 可自主调用。
+- `/remember <text>` 直接调用 `store.memory_add`，不经过 LLM。
+- `/memory` 列出所有记忆（id + date + text）。`/forget <id>` 删除指定记忆。
+- `/status` 新增 FTS5 状态行。
+- SOUL.md 已去掉 memory 工具规则中的"（Phase 4 启用）"标注。
+
+### 实现要点
+- FTS5 触发器确保 INSERT/DELETE/UPDATE 时自动同步索引，无需手动维护。
+- `_try_fts5` 在迁移时执行 `rebuild` 以索引已有数据（从 v2 升级时 memories 表可能已有数据）。
+- `memory_search` FTS5 模式使用 `ORDER BY rank`（BM25 相关性排序）；LIKE 模式使用 `ORDER BY id DESC`。
+- `_build_system_prompt` 中 memory recall 失败静默降级（仅 debug 日志），不影响正常对话。
+
+### Phase 5 注意事项
+- Phase 5 范围：调度（APScheduler）+ 定时提醒 + heartbeat + 部署。
+- SOUL.md 中 set_reminder 规则已写好（标注"Phase 5 启用"），实现后去掉该标注。
+- `tools/scheduler.py` 已创建为空占位，Phase 5 直接填充。
+- reminders 表需新增到 store.py（schema v4）。

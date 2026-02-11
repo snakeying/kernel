@@ -238,6 +238,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/del_history #n — 删除会话\n"
         "/provider [name] — 查看/切换 provider\n"
         "/model [name] — 查看/切换模型\n"
+        "/remember &lt;text&gt; — 存入长期记忆\n"
+        "/memory — 查看所有长期记忆\n"
+        "/forget &lt;id&gt; — 删除指定记忆\n"
         "/cancel — 取消当前任务\n"
         "/status — 查看状态"
     ))
@@ -401,12 +404,59 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await _send_text(update, "当前没有进行中的任务。", parse_mode=None)
 
 
+async def cmd_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    state: BotState = context.bot_data["state"]
+    if not _check_user(update, state):
+        return
+    text = " ".join(context.args) if context.args else ""
+    if not text:
+        await _send_text(update, "用法：/remember <要记住的内容>", parse_mode=None)
+        return
+    mid = await state.store.memory_add(text)
+    await _send_text(update, f"已记住 (id={mid})", parse_mode=None)
+
+
+async def cmd_memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    state: BotState = context.bot_data["state"]
+    if not _check_user(update, state):
+        return
+    memories = await state.store.memory_list()
+    if not memories:
+        await _send_text(update, "暂无长期记忆。", parse_mode=None)
+        return
+    lines: list[str] = []
+    for m in memories:
+        date = state.format_dt(m["created_at"])
+        lines.append(f"<b>[{m['id']}]</b> {date} {m['text']}")
+    await _send_text(update, "\n".join(lines))
+
+
+async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    state: BotState = context.bot_data["state"]
+    if not _check_user(update, state):
+        return
+    if not context.args:
+        await _send_text(update, "用法：/forget <id>", parse_mode=None)
+        return
+    try:
+        mid = int(context.args[0])
+    except ValueError:
+        await _send_text(update, "ID 必须是数字。", parse_mode=None)
+        return
+    ok = await state.store.memory_delete(mid)
+    if ok:
+        await _send_text(update, f"已删除记忆 {mid}", parse_mode=None)
+    else:
+        await _send_text(update, f"记忆 {mid} 不存在。", parse_mode=None)
+
+
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state: BotState = context.bot_data["state"]
     if not _check_user(update, state):
         return
     agent = state.agent
     cli_status = agent.active_cli_name
+    fts5 = "yes" if state.store.fts5_available else "no (LIKE fallback)"
     lines = [
         "<b>Kernel Status</b>",
         "",
@@ -415,6 +465,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"Session: {agent.session_id or 'none'}",
         f"Busy: {'yes' if state.busy else 'no'}",
         f"CLI: {cli_status or 'idle'}",
+        f"FTS5: {fts5}",
         f"Time: {state.local_now().strftime('%Y-%m-%d %H:%M:%S')}",
     ]
     await _send_text(update, "\n".join(lines))
@@ -616,6 +667,9 @@ async def _post_init(app: Application) -> None:
         BotCommand("del_history", "删除会话"),
         BotCommand("provider", "查看/切换 provider"),
         BotCommand("model", "查看/切换模型"),
+        BotCommand("remember", "存入长期记忆"),
+        BotCommand("memory", "查看长期记忆"),
+        BotCommand("forget", "删除指定记忆"),
         BotCommand("cancel", "取消当前任务"),
         BotCommand("status", "查看状态"),
     ]
@@ -687,6 +741,9 @@ async def run_bot() -> None:
     app.add_handler(CommandHandler("model", cmd_model))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("remember", cmd_remember))
+    app.add_handler(CommandHandler("memory", cmd_memory))
+    app.add_handler(CommandHandler("forget", cmd_forget))
 
     # Message handler — text, photos, and documents (private chat only)
     app.add_handler(MessageHandler(

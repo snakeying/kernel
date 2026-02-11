@@ -25,7 +25,6 @@
 - 不要在一个 `delegate_to_cli` 里塞太多任务，拆分为多次调用
 
 ### memory_add / memory_search / memory_list / memory_delete
-（Phase 4 启用）
 - 当用户明确要求"记住"某事时，调用 `memory_add`
 - 当需要回忆用户偏好、历史信息时，调用 `memory_search`
 - 不要过度记忆：只记有长期价值的信息（偏好、约定、重要事实）

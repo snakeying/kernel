@@ -225,7 +225,7 @@ class Agent:
                 log.warning("Unknown CLI agent type: %s", name)
 
     def _register_builtin_tools(self) -> None:
-        """Register delegate_to_cli as a tool."""
+        """Register built-in tools: delegate_to_cli + memory_*."""
 
         @self._registry.tool(
             "delegate_to_cli",
@@ -240,6 +240,36 @@ class Agent:
             cli: str | None = None,
         ) -> dict[str, Any]:
             return await self._handle_delegate_to_cli(task, cwd, cli)
+
+        @self._registry.tool(
+            "memory_add",
+            description="将一条信息存入长期记忆。只记有长期价值的信息（偏好、约定、重要事实）。",
+        )
+        async def memory_add(text: str) -> dict[str, Any]:
+            mid = await self.store.memory_add(text)
+            return {"id": mid}
+
+        @self._registry.tool(
+            "memory_search",
+            description="搜索长期记忆。用于回忆用户偏好、历史信息等。",
+        )
+        async def memory_search(query: str, limit: int = 5) -> list[dict[str, Any]]:
+            return await self.store.memory_search(query, limit)
+
+        @self._registry.tool(
+            "memory_list",
+            description="列出所有长期记忆。",
+        )
+        async def memory_list(limit: int = 200) -> list[dict[str, Any]]:
+            return await self.store.memory_list(limit)
+
+        @self._registry.tool(
+            "memory_delete",
+            description="删除指定 ID 的长期记忆。",
+        )
+        async def memory_delete(id: int) -> dict[str, Any]:
+            ok = await self.store.memory_delete(id)
+            return {"ok": ok}
 
         # Merge into active tool sets
         self._tools.update(self._registry.tool_defs())
@@ -436,12 +466,24 @@ class Agent:
 
     # -- Context building ------------------------------------------------
 
-    def _build_system_prompt(self) -> str:
-        """Build the full system prompt from SOUL.md + memory context."""
+    async def _build_system_prompt(self, user_query: str = "") -> str:
+        """Build the full system prompt from SOUL.md + recalled memories."""
         parts = []
         if self._soul:
             parts.append(self._soul)
-        # Phase 4 will inject long-term memory top-k here
+        # Recall top-k memories relevant to the user query
+        if user_query:
+            k = self.config.general.memory_recall_k
+            try:
+                memories = await self.store.memory_search(user_query, limit=k)
+            except Exception:
+                log.debug("Memory recall failed", exc_info=True)
+                memories = []
+            if memories:
+                lines = ["## 长期记忆（自动召回）"]
+                for m in memories:
+                    lines.append(f"- [{m['id']}] {m['text']}")
+                parts.append("\n".join(lines))
         return "\n\n".join(parts) if parts else ""
 
     def _truncate_history(self, messages: list[Message]) -> list[Message]:
@@ -474,7 +516,16 @@ class Agent:
         )
 
         llm = self._get_llm()
-        system = self._build_system_prompt()
+        # Extract user text for memory recall
+        if isinstance(user_content, str):
+            _user_query = user_content
+        elif isinstance(user_content, list):
+            _user_query = " ".join(
+                b.text for b in user_content if isinstance(b, TextContent)
+            )
+        else:
+            _user_query = ""
+        system = await self._build_system_prompt(_user_query)
         tools_list = list(self._tools.values()) if self._tools else None
 
         for _round in range(MAX_TOOL_ROUNDS):
