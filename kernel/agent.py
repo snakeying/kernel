@@ -3,6 +3,8 @@ import asyncio
 import json
 import logging
 import re
+import uuid
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Callable, Awaitable
 from kernel.config import Config, ProviderConfig, TitlesConfig
 from kernel.memory.store import Store
@@ -123,7 +125,7 @@ class Agent:
 
     def _register_builtin_tools(self) -> None:
 
-        @self._registry.tool('delegate_to_cli', description='当用户需要执行文件操作、代码编辑、项目分析、Shell 命令、浏览器操作等实际任务时使用。将任务委派给 CLI Agent（Claude Code 或 Codex）执行。默认在 tasks/ 目录下运行；如需在指定目录运行请传入 cwd。')
+        @self._registry.tool('delegate_to_cli', description='当用户需要执行文件操作、代码编辑、项目分析、Shell 命令、浏览器操作等实际任务时使用。将任务委派给 CLI Agent（Claude Code 或 Codex）执行。默认在 tasks/ 下为每次任务创建子目录运行；如需在指定目录运行请传入 cwd。')
         async def delegate_to_cli(task: str, cwd: str | None=None, cli: str | None=None) -> dict[str, Any]:
             return await self._handle_delegate_to_cli(task, cwd, cli)
 
@@ -181,7 +183,13 @@ class Agent:
             if tasks_dir.name.lower() != 'tasks':
                 tasks_dir = tasks_dir / 'tasks'
             tasks_dir.mkdir(parents=True, exist_ok=True)
-            work_dir = str(tasks_dir)
+            ts = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+            sid = self._session_id or 0
+            safe_cli = re.sub('[^A-Za-z0-9_-]', '_', cli_name)
+            uid = uuid.uuid4().hex[:6]
+            run_dir = tasks_dir / f's{sid}_{safe_cli}_{ts}_{uid}'
+            run_dir.mkdir(parents=True, exist_ok=True)
+            work_dir = str(run_dir)
         self._active_cli = agent
         try:
             result = await agent.run(task, work_dir)
