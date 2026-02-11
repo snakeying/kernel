@@ -306,6 +306,12 @@ wheels = [
 ]
 
 [[package]]
+name = "jieba"
+version = "0.42.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/cb/18eeb235f833b726522d7ebed54f2278ce28ba9438e3135ab0278d9792a2/jieba-0.42.1.tar.gz", hash = "sha256:055ca12f62674fafed09427f176506079bc135638a14e23e25be909131928db2", size = 19214172, upload-time = "2020-01-20T14:27:23.5Z" }
+
+[[package]]
 name = "jiter"
 version = "0.13.0"
 source = { registry = "https://pypi.org/simple" }
@@ -426,6 +432,7 @@ dependencies = [
     { name = "anthropic" },
     { name = "apscheduler" },
     { name = "httpx" },
+    { name = "jieba" },
     { name = "mcp" },
     { name = "mistune" },
     { name = "openai" },
@@ -441,6 +448,7 @@ requires-dist = [
     { name = "anthropic", specifier = ">=0.40,<1" },
     { name = "apscheduler", specifier = ">=3.10,<4" },
     { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "jieba", specifier = ">=0.42,<1" },
     { name = "mcp", specifier = ">=1.0,<2" },
     { name = "mistune", specifier = ">=3,<4" },
     { name = "openai", specifier = ">=1.50,<2" },

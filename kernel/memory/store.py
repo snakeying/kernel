@@ -22,10 +22,11 @@ from pathlib import Path
 from typing import Any
 
 import aiosqlite
+import jieba
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _DDL = """\
 CREATE TABLE IF NOT EXISTS sessions (
@@ -58,19 +59,13 @@ CREATE TABLE IF NOT EXISTS memories (
 """
 
 _FTS_DDL = """\
-CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(text, content=memories, content_rowid=id);
-
-CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-    INSERT INTO memories_fts(rowid, text) VALUES (new.id, new.text);
-END;
-CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, text) VALUES ('delete', old.id, old.text);
-END;
-CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-    INSERT INTO memories_fts(memories_fts, rowid, text) VALUES ('delete', old.id, old.text);
-    INSERT INTO memories_fts(rowid, text) VALUES (new.id, new.text);
-END;
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(text, content='', content_rowid=id);
 """
+
+
+def _tokenize(text: str) -> str:
+    """Tokenize text with jieba for FTS5 indexing/querying."""
+    return " ".join(jieba.cut_for_search(text))
 
 
 class Store:
@@ -108,11 +103,22 @@ class Store:
         """Try to create FTS5 virtual table. Returns True on success."""
         assert self._db
         try:
-            await self._db.executescript(_FTS_DDL)
-            # Rebuild index from existing data
-            await self._db.execute(
-                "INSERT INTO memories_fts(memories_fts) VALUES ('rebuild')"
+            # Drop old trigger-based FTS if upgrading from v3
+            await self._db.executescript(
+                "DROP TRIGGER IF EXISTS memories_ai;"
+                "DROP TRIGGER IF EXISTS memories_ad;"
+                "DROP TRIGGER IF EXISTS memories_au;"
+                "DROP TABLE IF EXISTS memories_fts;"
             )
+            await self._db.executescript(_FTS_DDL)
+            # Rebuild index from existing data with jieba tokenization
+            cur = await self._db.execute("SELECT id, text FROM memories")
+            rows = await cur.fetchall()
+            for row in rows:
+                await self._db.execute(
+                    "INSERT INTO memories_fts(rowid, text) VALUES (?, ?)",
+                    (row[0], _tokenize(row[1])),
+                )
             await self._db.commit()
             return True
         except Exception as exc:
@@ -279,25 +285,32 @@ class Store:
     async def memory_add(self, text: str) -> int:
         assert self._db
         cur = await self._db.execute("INSERT INTO memories (text) VALUES (?)", (text,))
+        mid = cur.lastrowid
+        if self.fts5_available:
+            await self._db.execute(
+                "INSERT INTO memories_fts(rowid, text) VALUES (?, ?)",
+                (mid, _tokenize(text)),
+            )
         await self._db.commit()
-        return cur.lastrowid  # type: ignore[return-value]
+        return mid  # type: ignore[return-value]
 
     async def memory_search(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
         assert self._db
         if self.fts5_available:
+            tokenized = _tokenize(query)
             try:
                 cur = await self._db.execute(
                     "SELECT m.id, m.text, m.created_at FROM memories m "
                     "JOIN memories_fts f ON m.id = f.rowid "
                     "WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?",
-                    (query, limit),
+                    (tokenized, limit),
                 )
                 rows = await cur.fetchall()
                 if rows:
                     return [dict(r) for r in rows]
             except Exception:
                 pass
-            # FTS5 returned nothing (common with CJK) — fall through to LIKE
+            # FTS5 returned nothing — fall through to LIKE
         cur = await self._db.execute(
             "SELECT id, text, created_at FROM memories "
             "WHERE text LIKE ? ORDER BY id DESC LIMIT ?",
@@ -317,6 +330,17 @@ class Store:
 
     async def memory_delete(self, memory_id: int) -> bool:
         assert self._db
+        if self.fts5_available:
+            # Contentless FTS5 delete requires original tokenized text
+            cur = await self._db.execute(
+                "SELECT text FROM memories WHERE id = ?", (memory_id,)
+            )
+            row = await cur.fetchone()
+            if row:
+                await self._db.execute(
+                    "INSERT INTO memories_fts(memories_fts, rowid, text) VALUES ('delete', ?, ?)",
+                    (memory_id, _tokenize(row[0])),
+                )
         cur = await self._db.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
         await self._db.commit()
         return cur.rowcount > 0

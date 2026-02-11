@@ -526,10 +526,12 @@ headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }  # 示例：从环境变�
 
 ### 决策记录
 - `memories` 表：`id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, created_at TEXT`。
-- FTS5：`memories_fts` 虚拟表（`content=memories, content_rowid=id`）+ 三个触发器（INSERT/DELETE/UPDATE 同步）。启动时 `_try_fts5()` 检测；失败则 `fts5_available=False`，`memory_search` 退化为 `LIKE %query%`。
+- FTS5：`memories_fts` contentless 虚拟表（`content='', content_rowid=id`），应用层通过 jieba 分词后手动同步（不用触发器，因为需要存分词后的文本而非原文）。启动时 `_try_fts5()` 检测；失败则 `fts5_available=False`，`memory_search` 退化为 `LIKE %query%`。
+- 新增依赖：`jieba>=0.42,<1`（中文分词，~15MB）。`_tokenize()` 使用 `jieba.cut_for_search`（搜索引擎模式，粒度更细）。
+- FTS5 搜索返回空时 fallback 到 LIKE；LIKE 也搜不到时，system prompt 注入最近 top-k 条记忆兜底。
 - 已迁移 DB 不重新创建 FTS5：`_check_fts5_exists()` 检查 `sqlite_master`。
-- Schema 版本 2 → 3。
-- `agent._build_system_prompt` 改为 `async`，接收 `user_query` 参数；用最近一条 user message 做 FTS5 召回 top-k（`config.general.memory_recall_k`，默认 5），注入格式 `## 长期记忆（自动召回）\n- [id] text`。
+- Schema 版本 2 → 4（跳过 3，因为 v3 的触发器方案已被替换）。
+- `agent._build_system_prompt` 改为 `async`，接收 `user_query` 参数；先搜索召回，搜不到则注入最近 top-k（`config.general.memory_recall_k`，默认 5），注入格式 `## 长期记忆（自动召回）\n- [id] text`。
 - memory 工具注册：`memory_add`/`memory_search`/`memory_list`/`memory_delete` 四个工具通过 `ToolRegistry` 装饰器注册，LLM 可自主调用。
 - `/remember <text>` 直接调用 `store.memory_add`，不经过 LLM。
 - `/memory` 列出所有记忆（id + date + text）。`/forget <id>` 删除指定记忆。
@@ -537,8 +539,11 @@ headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }  # 示例：从环境变�
 - SOUL.md 已去掉 memory 工具规则中的"（Phase 4 启用）"标注。
 
 ### 实现要点
-- FTS5 触发器确保 INSERT/DELETE/UPDATE 时自动同步索引，无需手动维护。
-- `_try_fts5` 在迁移时执行 `rebuild` 以索引已有数据（从 v2 升级时 memories 表可能已有数据）。
+- jieba `cut_for_search` 模式：在精确模式基础上对长词再切分，提高召回率（如"昭和时期"→"昭和 时期"）。
+- FTS5 使用 contentless 表（`content=''`）：只存分词后的文本用于搜索，原文从 `memories` 表读取。
+- `memory_add` 同时写 `memories` 表（原文）和 `memories_fts`（分词文本）。
+- `memory_delete` 先查原文 → tokenize → 从 FTS5 删除 → 再删 memories 行。
+- `_try_fts5` 迁移时：先清理旧触发器和旧 FTS 表（兼容 v3），再重建并索引已有数据。
 - `memory_search` FTS5 模式使用 `ORDER BY rank`（BM25 相关性排序）；LIKE 模式使用 `ORDER BY id DESC`。
 - `_build_system_prompt` 中 memory recall 失败静默降级（仅 debug 日志），不影响正常对话。
 
@@ -546,4 +551,4 @@ headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }  # 示例：从环境变�
 - Phase 5 范围：调度（APScheduler）+ 定时提醒 + heartbeat + 部署。
 - SOUL.md 中 set_reminder 规则已写好（标注"Phase 5 启用"），实现后去掉该标注。
 - `tools/scheduler.py` 已创建为空占位，Phase 5 直接填充。
-- reminders 表需新增到 store.py（schema v4）。
+- reminders 表需新增到 store.py（schema v5）。
