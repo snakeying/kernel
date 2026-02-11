@@ -380,6 +380,10 @@ class Store:
                     fname = text.split("]", 1)[0].removeprefix("[文件: ")
                     slimmed.append({"type": "text", "text": f"[文件 {fname} 已处理]"})
                     continue
+                # Voice message slimming
+                if text.startswith("[语音: ") and text.endswith("]"):
+                    slimmed.append({"type": "text", "text": "[语音已处理]"})
+                    continue
 
             # Tool result slimming (Phase 2)
             if btype == "tool_result":

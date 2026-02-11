@@ -46,6 +46,15 @@ models = ["claude-sonnet-4-5-20250929", "claude-opus-4-6"]
 # max_tokens = 100
 # headers = { User-Agent = "Mozilla/5.0 ..." }
 
+# [stt]
+# api_base = "https://api.openai.com/v1"
+# api_key = "sk-..."                        # env: KERNEL_STT_API_KEY
+# model = "whisper-1"
+# headers = { User-Agent = "Mozilla/5.0 ..." }
+
+# [tts]
+# voice = "zh-CN-XiaoxiaoNeural"           # edge-tts voice (free)
+
 [cli.claude_code]
 command = "claude"
 args = ["-p", "--output-format", "text"]

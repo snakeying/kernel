@@ -532,3 +532,22 @@ headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }  # 示例：从环境变�
 ### 实现要点
 - 当前时间格式：`2026-02-11T21:42:00+0800（Asia/Shanghai）`，每次对话动态生成。
 - systemd service 使用 `uv run -m kernel` 启动，`Restart=on-failure`。
+
+## Phase 6
+
+### 决策记录
+- STT：OpenAI Whisper 兼容 API（`openai.AsyncOpenAI`），支持 `api_base`/`api_key`/`model`/`headers` 配置。
+- TTS：`edge-tts`（免费，中文质量好）生成 mp3，`static-ffmpeg`（pip 包自带 ffmpeg 二进制）转换为 ogg opus。
+- 依赖变更：移除 `pydub`，改用 `edge-tts>=7,<8` + `static-ffmpeg>=3,<4`。
+- `STTConfig` 去掉 `type` 字段（无需区分类型，统一用 OpenAI 兼容 API），新增 `headers` 字段。
+- `static_ffmpeg.add_paths()` 在 `run_bot()` 启动时调用（首次下载 ffmpeg 二进制，后续秒过）。
+- 语音消息经 STT 转写后以 `[语音: {text}]` 格式传给 LLM。
+- 历史瘦身：`[语音: ...]` → `[语音已处理]`。
+- TTS 失败时 fallback 到文字回复（try/except + log warning）。
+- STT 未配置时发语音消息直接拒绝并提示。TTS 未配置时语音输入仍以文字回复。
+
+### 实现要点
+- `STTClient` 使用 `openai.AsyncOpenAI` 的 `audio.transcriptions.create`，支持自定义 headers（`default_headers`）。
+- `TTSClient.synthesize` 流程：`edge_tts.Communicate` → mp3 → `static_ffmpeg` subprocess → ogg opus（`-c:a libopus -b:a 48k`）→ 清理临时 mp3。
+- `bot.py` 语音分支在图片分支之前（`msg.voice` 优先检查）。
+- `is_voice` 标记通过 `state._last_message_was_voice` 追踪，TTS 回复后重置。

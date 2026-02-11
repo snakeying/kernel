@@ -10,7 +10,6 @@ import asyncio
 import base64
 import logging
 import re
-import traceback
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -31,6 +30,8 @@ from kernel.agent import Agent
 from kernel.config import Config, load_config
 from kernel.memory.store import Store
 from kernel.render import md_to_tg_html, split_tg_message
+from kernel.voice.stt import STTClient
+from kernel.voice.tts import TTSClient
 
 log = logging.getLogger(__name__)
 
@@ -127,6 +128,9 @@ class BotState:
         self.busy_notified = False
         self._chat_task: asyncio.Task | None = None  # running chat task for /cancel
         self._tz = ZoneInfo(config.general.timezone)
+        self.stt: STTClient | None = None
+        self.tts: TTSClient | None = None
+        self._last_message_was_voice = False
 
     def local_now(self) -> datetime:
         return datetime.now(self._tz)
@@ -526,8 +530,46 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         content_blocks: list[Any] = []
         msg = update.message
 
+        # Voice message handling
+        if msg and msg.voice:
+            if not state.stt:
+                await _send_text(
+                    update,
+                    "语音消息功能未配置。请在 config.toml 中添加 [stt] 配置。",
+                    parse_mode=None,
+                )
+                return
+
+            voice = msg.voice
+            if voice.file_size and voice.file_size > _MAX_FILE_SIZE:
+                await _send_text(update, "语音文件超过 20MB，无法处理。", parse_mode=None)
+                return
+
+            downloads_dir = state.config.data_path / "downloads"
+            downloads_dir.mkdir(parents=True, exist_ok=True)
+            file = await voice.get_file()
+            local_path = downloads_dir / f"{file.file_unique_id}.ogg"
+            await file.download_to_drive(str(local_path))
+
+            try:
+                text = await state.stt.transcribe(local_path)
+                log.info("STT transcribed: %s", text[:100])
+            except Exception as exc:
+                log.exception("STT failed")
+                await _send_text(update, f"语音识别失败：{exc}", parse_mode=None)
+                return
+            finally:
+                local_path.unlink(missing_ok=True)
+
+            if not text.strip():
+                await _send_text(update, "未识别到语音内容。", parse_mode=None)
+                return
+
+            state._last_message_was_voice = True
+            content_blocks.append(TextContent(text=f"[语音: {text}]"))
+
         # Image handling
-        if msg and msg.photo:
+        elif msg and msg.photo:
             photo = msg.photo[-1]  # highest resolution
             file = await photo.get_file()
             buf = BytesIO()
@@ -662,6 +704,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Title generation (fire-and-forget, after first exchange)
         await state.agent.maybe_generate_title()
 
+        # TTS reply if user sent voice and TTS is configured
+        if state._last_message_was_voice and state.tts:
+            state._last_message_was_voice = False
+            try:
+                voice_dir = state.config.data_path / "voice_replies"
+                voice_dir.mkdir(parents=True, exist_ok=True)
+                voice_path = voice_dir / f"{msg.message_id}.ogg"
+
+                await state.tts.synthesize(full_text, voice_path)
+
+                chat_id = update.effective_chat.id
+                with open(voice_path, "rb") as vf:
+                    await update.get_bot().send_voice(chat_id=chat_id, voice=vf)
+
+                voice_path.unlink(missing_ok=True)
+                return
+            except Exception as exc:
+                log.warning("TTS failed, falling back to text: %s", exc)
+
+        # Reset voice flag for non-voice messages
+        if msg and not msg.voice:
+            state._last_message_was_voice = False
+
         # Render Markdown → TG HTML and send
         try:
             html = md_to_tg_html(full_text)
@@ -724,6 +789,10 @@ async def run_bot() -> None:
 
     log.info("Starting Kernel …")
 
+    # Ensure static-ffmpeg binaries are available (downloads on first run)
+    import static_ffmpeg
+    static_ffmpeg.add_paths()
+
     # Init store
     store = Store(config.data_path / "kernel.db")
     await store.init()
@@ -742,8 +811,27 @@ async def run_bot() -> None:
     # Ensure data dirs
     (config.data_path / "cli_outputs").mkdir(parents=True, exist_ok=True)
     (config.data_path / "downloads").mkdir(parents=True, exist_ok=True)
+    (config.data_path / "voice_replies").mkdir(parents=True, exist_ok=True)
+
+    # Init STT/TTS clients
+    stt_client = None
+    if config.stt:
+        stt_client = STTClient(
+            api_base=config.stt.api_base,
+            api_key=config.stt.api_key,
+            model=config.stt.model,
+            headers=config.stt.headers,
+        )
+        log.info("STT enabled: %s", config.stt.model)
+
+    tts_client = None
+    if config.tts:
+        tts_client = TTSClient(voice=config.tts.voice)
+        log.info("TTS enabled: %s", config.tts.voice)
 
     state = BotState(config, agent, store)
+    state.stt = stt_client
+    state.tts = tts_client
 
     # Build application (concurrent so /cancel and busy guard work during streaming)
     app = (
@@ -771,9 +859,9 @@ async def run_bot() -> None:
     app.add_handler(CommandHandler("memory", cmd_memory))
     app.add_handler(CommandHandler("forget", cmd_forget))
 
-    # Message handler — text, photos, and documents (private chat only)
+    # Message handler — text, photos, documents, and voice (private chat only)
     app.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & (filters.TEXT | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,
+        filters.ChatType.PRIVATE & (filters.TEXT | filters.PHOTO | filters.Document.ALL | filters.VOICE) & ~filters.COMMAND,
         handle_message,
     ))
 

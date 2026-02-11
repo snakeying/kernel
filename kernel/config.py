@@ -65,6 +65,19 @@ class TitlesConfig:
 
 
 @dataclass
+class STTConfig:
+    api_base: str
+    api_key: str
+    model: str = "whisper-1"
+    headers: dict[str, str] | None = None
+
+
+@dataclass
+class TTSConfig:
+    voice: str
+
+
+@dataclass
 class CLIConfig:
     command: str
     args: list[str] = field(default_factory=list)
@@ -86,6 +99,8 @@ class Config:
     general: GeneralConfig
     providers: dict[str, ProviderConfig]
     titles: TitlesConfig | None
+    stt: STTConfig | None
+    tts: TTSConfig | None
     cli: dict[str, CLIConfig]
     mcp_servers: list[MCPServerConfig]
     config_dir: Path  # directory containing config.toml (path base)
@@ -244,6 +259,33 @@ def load_config(path: str | Path | None = None) -> Config:
         else:
             log.warning("Titles API key not set — auto-title disabled.")
 
+    # -- STT -------------------------------------------------------------
+    stt: STTConfig | None = None
+    if "stt" in raw:
+        s = raw["stt"]
+        s_api_key = os.environ.get("KERNEL_STT_API_KEY") or s.get("api_key", "")
+        if s_api_key and s_api_key != "sk-...":
+            try:
+                s_headers = _expand_headers(s.get("headers"))
+            except ValueError as exc:
+                log.warning("STT headers: %s — skipping headers", exc)
+                s_headers = None
+            stt = STTConfig(
+                api_base=s.get("api_base", "https://api.openai.com/v1"),
+                api_key=s_api_key,
+                model=s.get("model", "whisper-1"),
+                headers=s_headers,
+            )
+        else:
+            log.warning("STT API key not set — voice messages disabled.")
+
+    # -- TTS -------------------------------------------------------------
+    tts: TTSConfig | None = None
+    if "tts" in raw:
+        t = raw["tts"]
+        voice = t.get("voice", "zh-CN-XiaoxiaoNeural")
+        tts = TTSConfig(voice=voice)
+
     # -- CLI -------------------------------------------------------------
     cli: dict[str, CLIConfig] = {}
     for name, c in raw.get("cli", {}).items():
@@ -273,6 +315,8 @@ def load_config(path: str | Path | None = None) -> Config:
         general=general,
         providers=providers,
         titles=titles,
+        stt=stt,
+        tts=tts,
         cli=cli,
         mcp_servers=mcp_servers,
         config_dir=config_dir,
