@@ -471,19 +471,21 @@ class Agent:
         parts = []
         if self._soul:
             parts.append(self._soul)
-        # Recall top-k memories relevant to the user query
-        if user_query:
-            k = self.config.general.memory_recall_k
-            try:
+        # Recall top-k memories: search first, fallback to most recent
+        k = self.config.general.memory_recall_k
+        memories: list[dict] = []
+        try:
+            if user_query:
                 memories = await self.store.memory_search(user_query, limit=k)
-            except Exception:
-                log.debug("Memory recall failed", exc_info=True)
-                memories = []
-            if memories:
-                lines = ["## 长期记忆（自动召回）"]
-                for m in memories:
-                    lines.append(f"- [{m['id']}] {m['text']}")
-                parts.append("\n".join(lines))
+            if not memories:
+                memories = await self.store.memory_list(limit=k)
+        except Exception:
+            log.debug("Memory recall failed", exc_info=True)
+        if memories:
+            lines = ["## 长期记忆（自动召回）"]
+            for m in memories:
+                lines.append(f"- [{m['id']}] {m['text']}")
+            parts.append("\n".join(lines))
         return "\n\n".join(parts) if parts else ""
 
     def _truncate_history(self, messages: list[Message]) -> list[Message]:

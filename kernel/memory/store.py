@@ -285,18 +285,24 @@ class Store:
     async def memory_search(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
         assert self._db
         if self.fts5_available:
-            cur = await self._db.execute(
-                "SELECT m.id, m.text, m.created_at FROM memories m "
-                "JOIN memories_fts f ON m.id = f.rowid "
-                "WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?",
-                (query, limit),
-            )
-        else:
-            cur = await self._db.execute(
-                "SELECT id, text, created_at FROM memories "
-                "WHERE text LIKE ? ORDER BY id DESC LIMIT ?",
-                (f"%{query}%", limit),
-            )
+            try:
+                cur = await self._db.execute(
+                    "SELECT m.id, m.text, m.created_at FROM memories m "
+                    "JOIN memories_fts f ON m.id = f.rowid "
+                    "WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?",
+                    (query, limit),
+                )
+                rows = await cur.fetchall()
+                if rows:
+                    return [dict(r) for r in rows]
+            except Exception:
+                pass
+            # FTS5 returned nothing (common with CJK) — fall through to LIKE
+        cur = await self._db.execute(
+            "SELECT id, text, created_at FROM memories "
+            "WHERE text LIKE ? ORDER BY id DESC LIMIT ?",
+            (f"%{query}%", limit),
+        )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
