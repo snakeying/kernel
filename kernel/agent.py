@@ -313,8 +313,6 @@ class Agent:
         try:
             if user_query:
                 memories = await self.store.memory_search(user_query, limit=k)
-            if not memories:
-                memories = await self.store.memory_list(limit=k)
         except Exception:
             log.debug('Memory recall failed', exc_info=True)
         if memories:
