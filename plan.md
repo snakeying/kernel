@@ -128,8 +128,8 @@ H:\Project-X\
   - 图片：base64 替换为 `[图片已处理]`
   - 文件：提取文本替换为 `[文件 xxx.py 已处理]`
 - **长期记忆注入默认仅召回 top-k**（默认 5，可用 config.toml 的 `general.memory_recall_k` 调整），不全量注入上下文；其余通过 `memory_search` 现查。
-- **provider/model 是全局运行时状态**：不按 session 持久化；重启回到 config.toml 默认值；`/new` 继承当前 provider/model。
-- **`/cancel` 在 Phase 1 实现最小可用**：先取消 LLM streaming + tool loop；Phase 2 再扩展到取消 CLI 子进程。
+- **provider/model 持久化**：切换 provider/model 时自动保存到 SQLite `settings` 表；重启后恢复上次选择；若上次 provider 不可用则回退到 config.toml 的 `default_provider`。`/new` 继承当前 provider/model。
+- **`/cancel` 已完整实现**：取消 LLM streaming + tool loop + kill CLI 子进程。
 - **CLI 两个都可用**：默认 Claude Code；必要时可通过自然语言或 `delegate_to_cli(cli=...)` 指定 Codex。
 - **7 天清理策略维持不变**：下载文件与 `data_dir/cli_outputs/` 7 天自动清理；历史里引用的 artifact 可能过期（可接受）。
 
@@ -150,7 +150,7 @@ class LLM(ABC):
 - 支持 Vision（图片作为 image content 传给 LLM，不检查模型是否支持，由用户确保）
 - **多 Provider 支持**：config.toml 配置多个 provider（Anthropic、OpenAI、DeepSeek、Ollama 等）
 - **两级切换**：`/provider` 切换 provider，`/model` 切换当前 provider 下的模型
-- **provider/model 为全局运行时状态**，不按 session 存储且不持久化；进程重启后回到 config.toml 的默认值；`/new` 继承当前 provider/model
+- **provider/model 持久化到 SQLite `settings` 表**：切换时自动保存，重启后恢复；provider 不可用时回退到 config.toml 默认值；`/new` 继承当前 provider/model
 - `/model` 仅允许在 config.toml 中为该 provider 配置的 `models=[...]` 里选择；不在列表中直接报错
 - 自然语言不切换对话模型，仅用于 CLI 委派时指定 CC/Codex
 
@@ -171,7 +171,7 @@ class CLIAgent(ABC):
 - 作为 LLM 的一个 tool 注册，LLM 自主决定何时调用
 - tool 描述："当用户需要执行文件操作、代码编辑、项目分析、Shell 命令、浏览器操作等实际任务时使用"
 - Claude Code：通过子进程调用，统一执行 `command + args + [task]`（如 `claude -p --output-format text "task"`）
-- Codex：通过子进程调用，使用 `codex exec` 非交互模式；统一执行 `command + args + [task]`，并在运行时追加 `-C <cwd>` + `--output-last-message <file>`（确保可靠取回最终回复）。建议在 args 里固定 `-a never`（否则可能等待人工审批）。示例（默认 `data_dir="data"`）：`codex -a never exec --sandbox workspace-write --skip-git-repo-check --color never -C "H:\\Project-X" --output-last-message "data/cli_outputs/xxx.txt" "task"`
+- Codex：通过子进程调用，使用 `codex exec` 非交互模式；统一执行 `command + args + [task]`，并在运行时追加 `-C <cwd>` + `--output-last-message <file>`（确保可靠取回最终回复）。Windows 上需使用 `--dangerously-bypass-approvals-and-sandbox`（sandbox 在 Windows 上不可用）。示例（默认 `data_dir="data"`）：`codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --color never -C "H:\\Project-X" --output-last-message "data/cli_outputs/xxx.txt" "task"`
 - 默认 Claude Code；用户自然语言指定（"用codex帮我..."）时切换 Codex；不支持并发（串行执行）
 - 运行参数：`cwd` 优先取 tool 入参；否则使用 `general.default_workspace`（相对 config.toml 所在目录）；不做路径限制
 - 取消/超时：支持 TG `/cancel` 取消；CLI 子进程超时 10min 自动 kill
@@ -327,7 +327,7 @@ args = ["-p", "--output-format", "text"]  # 额外参数，task 追加在末尾�
 
 [cli.codex]
 command = "codex"
-args = ["-a", "never", "exec", "--sandbox", "workspace-write", "--skip-git-repo-check", "--color", "never"]
+args = ["exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--color", "never"]
 
 [[mcp.servers]]
 name = "exa"
@@ -432,6 +432,7 @@ headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }  # 示例：从环境变�
 
 ## Phase 1
 
+### 决策记录
 - 新增：Claude `max_tokens` 改为可配置：`providers.<name>.max_tokens`（默认 4096）；因为 Claude Messages API 必填该参数。
 - 新增：Claude `max_tokens` 为必填（Claude Messages API 要求），无代码级默认值；OpenAI 兼容类型 `max_tokens` 可选。
 - 新增：所有 provider（含 `[titles]`）支持 `headers` 字段，透传到 SDK 的 `default_headers`，用于自定义 User-Agent 等。
@@ -440,4 +441,55 @@ headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }  # 示例：从环境变�
 - 新增：会话标题（可选）：支持在 `config.toml` 配置 `[titles]` + 专用 provider/model；新会话首轮对话后自动生成一次标题；支持 `/retitle` 手动重生（默认当前会话）。
 - 新增：标题生成遇到瞬时错误（例如 429/5xx/网络超时）自动重试（0/3/15/60s）；最终失败仅告警日志，不影响聊天。
 - 新增：`/history` 显示 `#1..#20` 序号（映射到真实 session id），输出简化为 `#<n> YYYY-MM-DD <title>`（本地时间，时区来自 `general.timezone`）；`/resume` `/del_history` `/retitle` 均使用 `#<n>`。
+- 变更：SOUL.md 暂时移除了 delegate_to_cli / memory_add / set_reminder 的工具规则和记忆规则（Phase 1 无 tool）；**Phase 2 开始时必须加回**。
+
+### 实现要点
+- TG Bot 使用 `concurrent_updates=True`，否则 `/cancel` 和忙碌拒绝无法生效（update 会排队）。
+- `/cancel` 由 `cmd_cancel` 发送"已取消"；`handle_message` 的 `CancelledError` 静默 return，避免重复发送。
+- 标题生成的 `_clean_title()` 会剥离 `<think>` 思维链标签（含未闭合的），兼容思考模型。
+- 标题生成触发从 async generator post-yield 移到了 `bot.py` 的 `maybe_generate_title()` 调用（async generator 尾部代码不可靠）。
+- 标题生成遇到 429 直接放弃不重试。
+- Markdown→TG HTML 使用 mistune 3.x，`render_token` 需覆盖以匹配 HTMLRenderer 的 children/raw/attrs 模式。
+- 消息分割 `split_tg_message` 的标签修复：必须按文档顺序处理 open/close 标签，且重开标签时保留原始属性（`_find_unclosed_tags` 返回 `(tag_name, full_open_tag)` 元组）。
+- 消息分割重开标签时需逆序 prepend（因为 prepend 会反转顺序）。
+
+### Phase 2 注意事项
+- **必须**恢复 SOUL.md 中的 delegate_to_cli / memory_add / set_reminder 工具规则和记忆规则。
+- tool use 循环骨架已在 `agent.py` 中就绪（`self._tools` / `self._tool_handlers` 字典），Phase 2 注册即可。
+- `tools/registry.py` 和 `cli/` 目录已创建为空占位，Phase 2 直接填充。
+- 历史瘦身框架已就绪（`Store.slim_content`），Phase 2 需扩展 tool_result 瘦身规则。
+
+## Phase 2
+
+### 决策记录
+- 新增依赖：`mcp>=1.0,<2`（MCP SDK）+ `httpx>=0.27,<1`（MCP HTTP transport 需要）。
+- `tools/registry.py`：装饰器 `@registry.tool(name, description=...)` 从函数签名自动生成 JSON Schema；支持 `str|None`（Optional）、`Literal[...]`（enum）等类型映射；另有 `registry.register(...)` 方法供 MCP 工具动态注册。
+- `cli/base.py`：`CLIAgent` 抽象基类，`run()` 方法通过 `asyncio.create_subprocess_exec` 执行子进程，统一处理超时（10min）、取消、输出落盘（`data_dir/cli_outputs/`）、50K 字符截断（头尾保留）。`CLIResult` 数据类包含 `ok/cli_name/cwd/exit_code/output_path/output`。
+- `cli/claude_code.py`：`build_command` = `[command, *args, task]`；输出取自 stdout。
+- `cli/codex.py`：`build_command` 运行时追加 `-C <cwd>` + `--output-last-message <output_path>` + task；输出优先从 `--output-last-message` 文件读取，fallback 到 stdout。
+- `mcp/client.py`：使用 `contextlib.AsyncExitStack` 保持 `streamable_http_client` / `stdio_client` + `ClientSession` 上下文存活。工具命名 `{server_name}.{tool_name}`。连接失败跳过不阻塞启动。工具调用失败自动重连一次再重试。
+- `agent.py` 集成：`__init__` 中注册 `delegate_to_cli` 内置工具；`init_mcp()` 异步方法连接 MCP 并注册工具；MCP 工具通过闭包绑定 `qualified_name` 并路由到 `MCPClient.call_tool()`。
+- `agent.cancel()` 现在同时 kill 正在运行的 CLI 子进程（`asyncio.create_task(self._active_cli.kill())`）。
+- `bot.py`：当 `delegate_to_cli` 工具执行时发送 "⏳ 正在执行任务…" 等待提示；`/cancel` 显示被终止的 CLI 名称；`/status` 新增 CLI 运行状态行。
+- SOUL.md 已恢复工具使用规则：delegate_to_cli、memory_*（Phase 4 启用）、set_reminder（Phase 5 启用）、MCP 工具命名与使用说明。
+- `Store.slim_content` 扩展：delegate_to_cli 结果（含 output_path）一律瘦身；其他 tool_result 超 200 字符时瘦身。规则化生成一句话摘要（尝试解析 JSON 提取 ok/cli/exit_code/output_path，fallback 到前 80 字符预览 + 字符数）。
+- provider/model 持久化：新增 `settings` 表（schema v2），切换时 `set_setting` 保存，启动时 `restore_provider_model` 恢复。
+- 标题自动生成触发条件：从 `msg_count == 2` 改为检查 session 无标题（兼容 tool use 产生多条消息的情况）。
+- Windows Ctrl+C shutdown：`except Exception` → `except BaseException`（CancelledError 继承自 BaseException）；shutdown 顺序改为 store → agent → app（趁 event loop 存活关 DB）；`Store.close()` async 失败时 fallback 到同步关闭底层连接。
+- Windows CLI 子进程：`shutil.which` 解析 `.cmd` 文件；解析失败时 fallback 到 `create_subprocess_shell`。
+- MCP `streamable_http_client` 返回值用 `streams[0], streams[1]` 解包，兼容 2/3 元素。
+- Codex args 改为 `--dangerously-bypass-approvals-and-sandbox`（Windows 上 sandbox 不可用）。
+
+### 实现要点
+- MCP client 使用 `streamable_http_client`（v2 API，返回 2 元素元组 `(read, write)`），HTTP headers 通过 `httpx.AsyncClient(headers=...)` 传递。
+- CLI 子进程通过 `asyncio.create_subprocess_exec` 启动（非 shell），env 继承当前环境。
+- `ToolRegistry` 同时支持装饰器注册（内置工具）和编程式注册（MCP 工具），两类工具统一存入 `self._tools` / `self._tool_handlers`。
+- `agent.chat()` 在工具执行前 yield 一个 `StreamChunk(tool_use_id=..., tool_name=...)` 通知 bot.py 显示等待提示。
+- `_handle_delegate_to_cli` 中 `self._active_cli` 追踪当前运行的 CLI，`cancel()` 和 `active_cli_name` 依赖此字段。
+
+### Phase 3 注意事项
+- Phase 3 范围：bot.py 集成文件上传处理（TG 文件下载 → 提取文本 → 传 LLM）。
+- 支持 txt、代码文件（py/js/ts/json/yaml/md 等，必须 UTF-8）；不支持 PDF/Office/非 UTF-8。
+- 文件最大 20MB，提取文本截断到 50K 字符。
+- 历史瘦身：文件内容替换为 `[文件 xxx.py 已处理]`。
 

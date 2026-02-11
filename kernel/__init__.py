@@ -1,0 +1,1 @@
+"""Kernel — Personal AI assistant."""

@@ -1,0 +1,74 @@
+# Kernel 配置文件模板
+# 复制为 config.toml 并填入你的 token/key
+
+[telegram]
+token = "YOUR_BOT_TOKEN"                    # 必填；env: KERNEL_TELEGRAM_TOKEN
+allowed_user = 0                            # 必填：你的 TG user ID（用 @userinfobot 获取）
+
+[general]
+timezone = "Asia/Shanghai"
+default_provider = "anthropic"              # 启动时默认 provider
+default_workspace = "."                     # CLI 默认 cwd，相对本文件所在目录
+context_rounds = 50                         # 上下文保留轮数
+memory_recall_k = 5                         # 长期记忆默认注入条数
+data_dir = "data"                           # 运行时数据目录
+
+[reminders]
+catch_up_hours = 24                         # 离线补偿窗口
+
+[heartbeat]
+interval_minutes = 0                        # 默认关闭
+cooldown_hours = 6
+# quiet_hours = { start = "00:00", end = "08:00" }
+
+[providers.anthropic]
+type = "claude"
+# api_base = "https://api.anthropic.com"   # 可选：自定义 endpoint
+api_key = "sk-ant-..."                      # env: KERNEL_PROVIDER_ANTHROPIC_API_KEY
+max_tokens = 16384                          # 必填（Claude Messages API 要求）
+default_model = "claude-sonnet-4-5-20250929"
+models = ["claude-sonnet-4-5-20250929", "claude-opus-4-6"]
+# headers = { User-Agent = "Mozilla/5.0 ..." }
+
+# [providers.openai]
+# type = "openai_compat"
+# api_base = "https://api.openai.com/v1"
+# api_key = "sk-..."                        # env: KERNEL_PROVIDER_OPENAI_API_KEY
+# default_model = "gpt-4o"
+# models = ["gpt-4o"]
+# headers = { User-Agent = "Mozilla/5.0 ..." }
+
+# [providers.deepseek]
+# type = "openai_compat"
+# api_base = "https://api.deepseek.com/v1"
+# api_key = "sk-..."                        # env: KERNEL_PROVIDER_DEEPSEEK_API_KEY
+# default_model = "deepseek-chat"
+# models = ["deepseek-chat"]
+# headers = { User-Agent = "Mozilla/5.0 ..." }
+
+# [titles]
+# type = "openai_compat"
+# api_base = "https://..."
+# api_key = "sk-..."                        # env: KERNEL_TITLES_API_KEY
+# model = "claude-haiku-4-5-20251001"
+# max_tokens = 100
+# headers = { User-Agent = "Mozilla/5.0 ..." }
+
+[cli.claude_code]
+command = "claude"
+args = ["-p", "--output-format", "text"]
+
+[cli.codex]
+command = "codex"
+args = ["exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--color", "never"]
+
+# [[mcp.servers]]
+# name = "exa"
+# type = "http"
+# url = "https://mcp.exa.ai/mcp"
+
+# [[mcp.servers]]
+# name = "context7"
+# type = "http"
+# url = "https://mcp.context7.com/mcp"
+# headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }  # env: CONTEXT7_API_KEY
