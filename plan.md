@@ -511,5 +511,13 @@ headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }  # 示例：从环境变�
 
 ### Phase 4 注意事项
 - Phase 4 范围：长期记忆（memory 表 + FTS5 + memory_* 工具 + /remember /memory /forget 命令）。
-- SOUL.md 需加回记忆相关规则（Phase 1 暂时移除）。
-- `agent.py` 需注册 memory_add / memory_search / memory_list / memory_delete 工具。
+- SOUL.md 中 memory 工具规则已写好（标注"Phase 4 启用"），实现后去掉该标注即可。
+- `agent.py` 需注册 memory_add / memory_search / memory_list / memory_delete 四个工具。
+- tool use 循环骨架已就绪（Phase 2），注册新工具即可被 LLM 调用。
+- FTS5 兜底：启动时检测 FTS5 可用性；不可用则 `memory_search` 退化为 LIKE。
+- 记忆召回 top-k 注入 system prompt（`agent._build_system_prompt`），默认 5 条（`config.general.memory_recall_k`）。
+- `/remember` 是 TG 命令（bot.py），直接调用 store 写入，不经过 LLM。
+- `/memory` 列出所有记忆，`/forget <id>` 删除指定记忆。
+
+### 验证结果
+- 全部 12 项测试通过 ✓
