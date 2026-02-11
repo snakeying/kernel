@@ -8,7 +8,7 @@ Kernel
 
 <p align="center">
   <strong>Multi-provider LLM · Long-term Memory · Voice I/O · CLI Delegation</strong><br/>
-  <em>Chat with AI, execute tasks, remember everything — all from Telegram</em>
+  <em>More than a chatbot — it remembers everything and gets things done.</em>
 </p>
 
 <p align="center">

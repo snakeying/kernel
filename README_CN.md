@@ -8,7 +8,7 @@ Kernel
 
 <p align="center">
   <strong>多模型 LLM · 长期记忆 · 语音交互 · CLI 委派</strong><br/>
-  <em>和 AI 聊天、执行任务、记住一切 —— 全在 Telegram 里完成</em>
+  <em>不只是聊天机器人 —— 它记住一切，执行任何任务。</em>
 </p>
 
 <p align="center">
