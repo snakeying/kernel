@@ -782,6 +782,7 @@ async def run_bot() -> None:
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)  # type: ignore[union-attr]
 
+
     # Run until stopped
     stop_event = asyncio.Event()
     try:

@@ -275,6 +275,7 @@ class Agent:
         self._tools.update(self._registry.tool_defs())
         self._tool_handlers.update(self._registry.handlers())
 
+
     async def init_mcp(self) -> None:
         """Connect to MCP servers and register their tools."""
         if not self.config.mcp_servers:
@@ -467,10 +468,18 @@ class Agent:
     # -- Context building ------------------------------------------------
 
     async def _build_system_prompt(self, user_query: str = "") -> str:
-        """Build the full system prompt from SOUL.md + recalled memories."""
+        """Build the full system prompt from SOUL.md + recalled memories + current time."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
         parts = []
         if self._soul:
             parts.append(self._soul)
+
+        # Inject current time
+        tz = ZoneInfo(self.config.general.timezone)
+        now = datetime.now(tz)
+        parts.append(f"## 当前时间\n{now.strftime('%Y-%m-%dT%H:%M:%S%z')}（{self.config.general.timezone}）")
         # Recall top-k memories: search first, fallback to most recent
         k = self.config.general.memory_recall_k
         memories: list[dict] = []

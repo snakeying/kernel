@@ -13,14 +13,6 @@ context_rounds = 50                         # 上下文保留轮数
 memory_recall_k = 5                         # 长期记忆默认注入条数
 data_dir = "data"                           # 运行时数据目录
 
-[reminders]
-catch_up_hours = 24                         # 离线补偿窗口
-
-[heartbeat]
-interval_minutes = 0                        # 默认关闭
-cooldown_hours = 6
-# quiet_hours = { start = "00:00", end = "08:00" }
-
 [providers.anthropic]
 type = "claude"
 # api_base = "https://api.anthropic.com"   # 可选：自定义 endpoint

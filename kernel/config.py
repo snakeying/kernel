@@ -43,18 +43,6 @@ class GeneralConfig:
 
 
 @dataclass
-class RemindersConfig:
-    catch_up_hours: int = 24
-
-
-@dataclass
-class HeartbeatConfig:
-    interval_minutes: int = 0
-    cooldown_hours: int = 6
-    quiet_hours: dict[str, str] | None = None
-
-
-@dataclass
 class ProviderConfig:
     name: str
     type: str  # "claude" | "openai_compat"
@@ -96,8 +84,6 @@ class MCPServerConfig:
 class Config:
     telegram: TelegramConfig
     general: GeneralConfig
-    reminders: RemindersConfig
-    heartbeat: HeartbeatConfig
     providers: dict[str, ProviderConfig]
     titles: TitlesConfig | None
     cli: dict[str, CLIConfig]
@@ -194,18 +180,6 @@ def load_config(path: str | Path | None = None) -> Config:
         data_dir=g.get("data_dir", "data"),
     )
 
-    # -- Reminders -------------------------------------------------------
-    r = raw.get("reminders", {})
-    reminders = RemindersConfig(catch_up_hours=r.get("catch_up_hours", 24))
-
-    # -- Heartbeat -------------------------------------------------------
-    h = raw.get("heartbeat", {})
-    heartbeat = HeartbeatConfig(
-        interval_minutes=h.get("interval_minutes", 0),
-        cooldown_hours=h.get("cooldown_hours", 6),
-        quiet_hours=h.get("quiet_hours"),
-    )
-
     # -- Providers -------------------------------------------------------
     providers: dict[str, ProviderConfig] = {}
     for name, praw in raw.get("providers", {}).items():
@@ -297,8 +271,6 @@ def load_config(path: str | Path | None = None) -> Config:
     return Config(
         telegram=telegram,
         general=general,
-        reminders=reminders,
-        heartbeat=heartbeat,
         providers=providers,
         titles=titles,
         cli=cli,

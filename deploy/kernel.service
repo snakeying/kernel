@@ -1,0 +1,17 @@
+﻿[Unit]
+Description=Kernel - Personal AI Assistant (Telegram)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kernel
+Group=kernel
+WorkingDirectory=/opt/kernel
+ExecStart=/opt/kernel/.venv/bin/python -m kernel
+Restart=on-failure
+RestartSec=10
+Environment=KERNEL_CONFIG=/opt/kernel/config.toml
+
+[Install]
+WantedBy=multi-user.target
