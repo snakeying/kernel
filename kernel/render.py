@@ -140,14 +140,27 @@ def split_tg_message(html: str, max_len: int=TG_MAX_LEN) -> list[str]:
                 split_at = idx + 1
             else:
                 split_at = max_len
+        unclosed: list[tuple[str, str]] = []
+        close_suffix = ''
+        while True:
+            chunk = remaining[:split_at]
+            unclosed = _find_unclosed_tags(chunk)
+            close_suffix = ''.join(f'</{tag_name}>' for tag_name, _ in reversed(unclosed))
+            if len(chunk) + len(close_suffix) <= max_len:
+                break
+            target = max_len - len(close_suffix)
+            if target <= 0 or target >= split_at:
+                unclosed = []
+                close_suffix = ''
+                break
+            split_at = target
         chunk = remaining[:split_at]
         remaining = remaining[split_at:]
-        unclosed = _find_unclosed_tags(chunk)
         if unclosed:
-            for tag_name, _ in reversed(unclosed):
-                chunk += f'</{tag_name}>'
-            for _, full_open_tag in reversed(unclosed):
-                remaining = full_open_tag + remaining
+            chunk += close_suffix
+            open_prefix = ''.join(full_open_tag for _, full_open_tag in unclosed)
+            if open_prefix:
+                remaining = open_prefix + remaining
         chunks.append(chunk)
     return chunks
 

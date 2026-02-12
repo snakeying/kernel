@@ -21,16 +21,15 @@ def _truncate_output(text: str, max_chars: int=OUTPUT_TRUNCATE_CHARS) -> str:
     return text[:half] + f'\n\n… [truncated {len(text) - max_chars} chars] …\n\n' + text[-half:]
 
 class CLIResult:
-    __slots__ = ('ok', 'cli_name', 'cwd', 'exit_code', 'output_path', 'output', 'raw_output')
+    __slots__ = ('ok', 'cli_name', 'cwd', 'exit_code', 'output_path', 'output')
 
-    def __init__(self, *, ok: bool, cli_name: str, cwd: str, exit_code: int, output_path: str, output: str, raw_output: str='') -> None:
+    def __init__(self, *, ok: bool, cli_name: str, cwd: str, exit_code: int, output_path: str, output: str) -> None:
         self.ok = ok
         self.cli_name = cli_name
         self.cwd = cwd
         self.exit_code = exit_code
         self.output_path = output_path
         self.output = output
-        self.raw_output = raw_output
 
     def to_dict(self) -> dict[str, Any]:
         return {'ok': self.ok, 'cli': self.cli_name, 'cwd': self.cwd, 'exit_code': self.exit_code, 'output_path': self.output_path, 'output': self.output}
@@ -107,7 +106,7 @@ class CLIAgent(ABC):
         except Exception:
             log.warning('Failed to write CLI output to %s', output_path, exc_info=True)
         truncated = _truncate_output(raw_output)
-        return CLIResult(ok=exit_code == 0, cli_name=self.name, cwd=cwd, exit_code=exit_code, output_path=str(output_path), output=truncated, raw_output=raw_output)
+        return CLIResult(ok=exit_code == 0, cli_name=self.name, cwd=cwd, exit_code=exit_code, output_path=str(output_path), output=truncated)
 
     async def kill(self) -> None:
         proc = self._process

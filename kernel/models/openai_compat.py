@@ -1,8 +1,11 @@
 from __future__ import annotations
 import json
+import logging
 from typing import Any, AsyncIterator
 import openai
 from kernel.models.base import ContentBlock, ImageContent, LLM, LLMResponse, Message, Role, StreamChunk, TextContent, ToolDef, ToolResultContent, ToolUseContent
+
+log = logging.getLogger(__name__)
 
 def _to_openai_content(blocks: list[ContentBlock] | str) -> str | list[dict[str, Any]]:
     if isinstance(blocks, str):
@@ -90,6 +93,31 @@ class OpenAICompatLLM(LLM):
         if tools:
             kwargs['tools'] = _to_openai_tools(tools)
         tool_calls_acc: dict[int, dict[str, Any]] = {}
+
+        def _flush_tool_calls() -> list[StreamChunk]:
+            out: list[StreamChunk] = []
+            for _idx in sorted(tool_calls_acc):
+                acc = tool_calls_acc[_idx]
+                tool_id = acc.get('id') or ''
+                tool_name = acc.get('name') or ''
+                if (not tool_id) or (not tool_name):
+                    log.warning(
+                        "Dropping incomplete tool_call from stream: idx=%s id=%r name=%r",
+                        _idx,
+                        tool_id,
+                        tool_name,
+                    )
+                    continue
+                args_parts = acc.get('arguments') or []
+                out.append(
+                    StreamChunk(
+                        tool_use_id=tool_id,
+                        tool_name=tool_name,
+                        tool_input_json=''.join(args_parts),
+                    )
+                )
+            tool_calls_acc.clear()
+            return out
         stream = await self._client.chat.completions.create(**kwargs)
         async for chunk in stream:
             if not chunk.choices:
@@ -112,11 +140,12 @@ class OpenAICompatLLM(LLM):
                         if tc_delta.function.arguments:
                             acc['arguments'].append(tc_delta.function.arguments)
             if finish:
-                for _idx in sorted(tool_calls_acc):
-                    acc = tool_calls_acc[_idx]
-                    yield StreamChunk(tool_use_id=acc['id'], tool_name=acc['name'], tool_input_json=''.join(acc['arguments']))
-                tool_calls_acc.clear()
+                for sc in _flush_tool_calls():
+                    yield sc
                 yield StreamChunk(finish_reason=finish)
+            if tool_calls_acc:
+                for sc in _flush_tool_calls():
+                    yield sc
 
     async def close(self) -> None:
         await self._client.close()

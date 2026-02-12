@@ -15,6 +15,24 @@ TITLE_MAX_LEN = 30
 _THINK_RE = re.compile("<think>.*?</think>", re.DOTALL)
 _THINK_OPEN_RE = re.compile("<think>.*", re.DOTALL)
 
+def _is_rate_limited(exc: Exception) -> bool:
+    for attr in ("status_code", "status"):
+        try:
+            code = getattr(exc, attr)
+        except Exception:
+            code = None
+        if code == 429:
+            return True
+    resp = getattr(exc, "response", None)
+    if getattr(resp, "status_code", None) == 429:
+        return True
+    exc_str = str(exc).lower()
+    return (
+        ("429" in exc_str)
+        or ("rate limit" in exc_str)
+        or ("too many requests" in exc_str)
+    )
+
 def _clean_title(raw: str) -> str:
     text = _THINK_RE.sub("", raw)
     text = _THINK_OPEN_RE.sub("", text)
@@ -92,10 +110,13 @@ class AgentTitlesMixin:
                     log.info("Session %d titled: %s", session_id, title)
                 return
             except Exception as exc:
-                exc_str = str(exc).lower()
-                if "429" in exc_str or "rate" in exc_str:
-                    log.warning("Title generation hit rate limit, giving up")
-                    return
+                if _is_rate_limited(exc):
+                    log.warning(
+                        "Title generation hit rate limit (attempt %d/%d), retrying",
+                        attempt + 1,
+                        len(TITLE_RETRY_DELAYS),
+                    )
+                    continue
                 log.warning(
                     "Title generation attempt %d/%d failed",
                     attempt + 1,

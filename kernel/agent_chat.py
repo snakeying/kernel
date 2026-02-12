@@ -144,6 +144,21 @@ class AgentChatMixin:
             await self.store.add_message_slimmed(
                 self._session_id, Role.TOOL_RESULT.value, _content_to_json(result_blocks)
             )
+        else:
+            msg_text = (
+                f"已达到最大工具调用轮数({MAX_TOOL_ROUNDS})，为避免无限循环已停止。\n"
+                "建议：缩小任务范围，或明确让模型直接输出最终结论（尽量不要反复调用工具）。"
+            )
+            assistant_blocks: list[ContentBlock] = [TextContent(text=msg_text)]
+            assistant_msg = Message(role=Role.ASSISTANT, content=assistant_blocks)
+            self._history.append(assistant_msg)
+            await self.store.add_message_slimmed(
+                self._session_id,
+                Role.ASSISTANT.value,
+                _content_to_json(assistant_blocks),
+            )
+            yield StreamChunk(text=msg_text)
+            yield StreamChunk(finish_reason="max_tool_rounds")
         try:
             self._slim_history_inplace()
         except Exception:
