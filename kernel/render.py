@@ -84,7 +84,7 @@ class TelegramHTMLRenderer(BaseRenderer):
         return text
 
     def block_html(self, html: str) -> str:
-        return html + '\n'
+        return escape_text(html) + '\n'
 
     def block_error(self, text: str) -> str:
         return ''
@@ -149,4 +149,28 @@ def split_tg_message(html: str, max_len: int=TG_MAX_LEN) -> list[str]:
             for _, full_open_tag in reversed(unclosed):
                 remaining = full_open_tag + remaining
         chunks.append(chunk)
+    return chunks
+
+def split_plain_text(text: str, max_len: int = TG_MAX_LEN) -> list[str]:
+    """Split plain text for Telegram without any HTML tag fixing."""
+    if len(text) <= max_len:
+        return [text]
+    chunks: list[str] = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= max_len:
+            chunks.append(remaining)
+            break
+        split_at = -1
+        idx = remaining.rfind("\n\n", 0, max_len)
+        if idx > max_len // 4:
+            split_at = idx + 2
+        else:
+            idx = remaining.rfind("\n", 0, max_len)
+            if idx > max_len // 4:
+                split_at = idx + 1
+            else:
+                split_at = max_len
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:]
     return chunks

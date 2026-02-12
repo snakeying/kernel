@@ -11,3 +11,6 @@ class STTClient:
         with open(audio_path, 'rb') as f:
             resp = await self._client.audio.transcriptions.create(model=self._model, file=f)
         return resp.text
+
+    async def close(self) -> None:
+        await self._client.close()

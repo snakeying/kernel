@@ -8,9 +8,9 @@ from typing import Any
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
-from kernel.render import md_to_tg_html, split_tg_message
+from kernel.render import md_to_tg_html
 from kernel.tg_common import BotState, _check_user, _mask_sensitive, _sanitize_filename, _send_text, _send_typing
-from kernel.tg_message_utils import _MAX_FILE_SIZE, _extract_file_text, _is_text_file, _to_tts_text
+from kernel.tg_message_utils import _MAX_FILE_SIZE, _extract_file_text, _is_text_file, _to_tts_text, _wrap_file_text
 
 log = logging.getLogger(__name__)
 
@@ -102,7 +102,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 return
             finally:
                 local_path.unlink(missing_ok=True)
-            content_blocks.append(TextContent(text=f'[文件: {filename}]\n```\n{text}\n```'))
+            content_blocks.append(TextContent(text=_wrap_file_text(filename, text)))
             if msg.caption:
                 content_blocks.append(TextContent(text=msg.caption))
         elif msg and msg.text:
@@ -141,6 +141,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         finally:
             if typing_task:
                 typing_task.cancel()
+                try:
+                    await typing_task
+                except asyncio.CancelledError:
+                    pass
 
         full_text = ''.join(text_parts)
         if not full_text.strip():
@@ -174,8 +178,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await _send_text(update, html_text, parse_mode=ParseMode.HTML)
         except Exception:
             log.warning('HTML render failed, falling back to plain text', exc_info=True)
-            for chunk_text in split_tg_message(full_text):
-                await _send_text(update, chunk_text, parse_mode=None)
+            await _send_text(update, full_text, parse_mode=None)
     finally:
         state._chat_task = None
         state.busy = False

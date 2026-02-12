@@ -153,17 +153,10 @@ class MCPClient:
         return defs
 
     async def call_tool(self, qualified_name: str, arguments: dict[str, Any]) -> str:
-        server_name: str
-        tool_name: str
-        if '.' in qualified_name:
-            dot = qualified_name.find('.')
-            server_name = qualified_name[:dot]
-            tool_name = qualified_name[dot + 1:]
-        else:
-            mapped = self._tool_map.get(qualified_name)
-            if not mapped:
-                return f"Error: unknown MCP tool '{qualified_name}'"
-            server_name, tool_name = mapped
+        mapped = self._tool_map.get(qualified_name)
+        if not mapped:
+            return f"Error: unknown MCP tool '{qualified_name}'"
+        server_name, tool_name = mapped
         conn = self._connections.get(server_name)
         if conn is None:
             return f"Error: MCP server '{server_name}' not configured"

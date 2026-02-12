@@ -43,15 +43,7 @@ def _json_to_content(data: Any) -> list[ContentBlock] | str:
         elif t == "image":
             blocks.append(ImageContent(media_type=d["media_type"], data=d["data"]))
         elif t == "tool_use":
-            name = d["name"]
-            if isinstance(name, str) and "." in name and (not name.startswith("mcp_")):
-                server, tool = name.split(".", 1)
-                try:
-                    from kernel.mcp.client import _safe_tool_name
-                    name = _safe_tool_name(server, tool)
-                except Exception:
-                    name = f"mcp_{server}__{tool}".replace(".", "_")
-            blocks.append(ToolUseContent(id=d["id"], name=name, input=d["input"]))
+            blocks.append(ToolUseContent(id=d["id"], name=d["name"], input=d["input"]))
         elif t == "tool_result":
             blocks.append(
                 ToolResultContent(

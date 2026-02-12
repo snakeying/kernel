@@ -1,13 +1,10 @@
 from __future__ import annotations
-
 import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
 import aiosqlite
-
 from kernel.memory.memories import (
     check_fts5_exists as _check_fts5_exists,
     memory_add as _memory_add,
@@ -30,6 +27,15 @@ _REQUIRED_COLUMNS: dict[str, set[str]] = {
     "memories": {"id", "text", "created_at"},
 }
 
+_ADD_COLUMN_DDL: dict[tuple[str, str], str] = {
+    ("sessions", "title"): 'ALTER TABLE sessions ADD COLUMN title TEXT',
+    ("sessions", "created_at"): "ALTER TABLE sessions ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+    ("sessions", "updated_at"): "ALTER TABLE sessions ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''",
+    ("sessions", "archived"): "ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+    ("messages", "created_at"): "ALTER TABLE messages ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+    ("memories", "created_at"): "ALTER TABLE memories ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+    ("settings", "value"): "ALTER TABLE settings ADD COLUMN value TEXT NOT NULL DEFAULT ''",
+}
 
 async def _get_user_version(db: aiosqlite.Connection) -> int:
     cur = await db.execute("PRAGMA user_version")
@@ -42,7 +48,6 @@ async def _table_columns(db: aiosqlite.Connection, table: str) -> set[str]:
     rows = await cur.fetchall()
     return {r["name"] for r in rows}
 
-
 async def _schema_compatible(db: aiosqlite.Connection) -> bool:
     version = await _get_user_version(db)
     if version != SCHEMA_VERSION:
@@ -53,27 +58,36 @@ async def _schema_compatible(db: aiosqlite.Connection) -> bool:
             return False
     return True
 
-
-def _delete_db_files(db_path: Path) -> None:
-    candidates = [
-        db_path,
-        db_path.with_name(db_path.name + "-wal"),
-        db_path.with_name(db_path.name + "-shm"),
-        db_path.with_name(db_path.name + "-journal"),
+def _format_db_error(db_path: Path, exc: BaseException) -> str:
+    msg = str(exc)
+    low = msg.lower()
+    hint = ""
+    if "database is locked" in low or "database is busy" in low:
+        hint = "Hint: database is locked. Make sure only one Kernel instance is running."
+    elif "disk i/o error" in low:
+        hint = "Hint: disk I/O error. Check storage health and permissions."
+    elif "malformed" in low or "not a database" in low:
+        hint = "Hint: database file looks corrupted. Restore from backup if possible."
+    parts = [
+        f"Database error: {msg}",
+        f"DB path: {db_path}",
     ]
-    errors: list[str] = []
-    for p in candidates:
-        try:
-            p.unlink(missing_ok=True)
-        except Exception as exc:
-            errors.append(f"{p}: {exc}")
-            log.warning("Failed to remove old DB file %s: %s", p, exc)
-    if db_path.exists():
-        msg = f"Failed to remove old DB file: {db_path}"
-        if errors:
-            msg += "\n" + "\n".join(errors)
-        raise RuntimeError(msg)
+    if hint:
+        parts.append(hint)
+    parts.append("Refusing to rebuild automatically to preserve data.")
+    return "\n".join(parts)
 
+async def _ensure_required_columns(db: aiosqlite.Connection) -> None:
+    for table, required in _REQUIRED_COLUMNS.items():
+        cols = await _table_columns(db, table)
+        missing = sorted(required - cols)
+        for col in missing:
+            ddl = _ADD_COLUMN_DDL.get((table, col))
+            if not ddl:
+                raise RuntimeError(
+                    f"DB schema incompatible: missing {table}.{col} (no safe migration)"
+                )
+            await db.execute(ddl)
 
 class Store:
 
@@ -90,43 +104,64 @@ class Store:
         except Exception as exc:
             if not exists_before:
                 raise
-            log.warning("Failed to open DB %s (%s) - rebuilding", self._db_path, exc)
-            _delete_db_files(self._db_path)
-            self._db = await aiosqlite.connect(str(self._db_path))
+            raise SystemExit(_format_db_error(self._db_path, exc)) from exc
         self._db.row_factory = aiosqlite.Row
         await self._db.execute('PRAGMA journal_mode=WAL')
         await self._db.execute('PRAGMA foreign_keys=ON')
-
-        if exists_before:
-            needs_rebuild = False
+        try:
+            await self._migrate()
+            if not await _schema_compatible(self._db):
+                raise RuntimeError("DB schema check failed after migration")
+        except Exception as exc:
             try:
-                needs_rebuild = not await _schema_compatible(self._db)
-            except Exception as exc:
-                log.warning("DB schema check failed (%s) - rebuilding", exc)
-                needs_rebuild = True
-            if needs_rebuild:
-                log.warning("DB schema mismatch - rebuilding database (data will be lost)")
                 await self.close()
-                _delete_db_files(self._db_path)
-                self._db = await aiosqlite.connect(str(self._db_path))
-                self._db.row_factory = aiosqlite.Row
-                await self._db.execute('PRAGMA journal_mode=WAL')
-                await self._db.execute('PRAGMA foreign_keys=ON')
-        await self._migrate()
+            except Exception:
+                pass
+            raise SystemExit(_format_db_error(self._db_path, exc)) from exc
 
     async def _migrate(self) -> None:
         assert self._db
-        cur = await self._db.execute('PRAGMA user_version')
-        row = await cur.fetchone()
-        version = row[0] if row else 0
+        version = await _get_user_version(self._db)
+        if version > SCHEMA_VERSION:
+            raise RuntimeError(
+                f"DB schema version {version} is newer than supported {SCHEMA_VERSION}"
+            )
+
+        await self._db.executescript(_DDL)
+        await _ensure_required_columns(self._db)
+
+        now = _now_iso()
+        await self._db.execute(
+            "UPDATE sessions SET created_at = ? WHERE created_at IS NULL OR created_at = ''",
+            (now,),
+        )
+        await self._db.execute(
+            "UPDATE sessions SET updated_at = ? WHERE updated_at IS NULL OR updated_at = ''",
+            (now,),
+        )
+        await self._db.execute(
+            "UPDATE messages SET created_at = ? WHERE created_at IS NULL OR created_at = ''",
+            (now,),
+        )
+        await self._db.execute(
+            "UPDATE memories SET created_at = ? WHERE created_at IS NULL OR created_at = ''",
+            (now,),
+        )
+
+        if version != SCHEMA_VERSION:
+            await self._db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
         if version < SCHEMA_VERSION:
-            await self._db.executescript(_DDL)
             self.fts5_available = await _try_fts5(self._db)
-            await self._db.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
-            await self._db.commit()
-            log.info('Database migrated to version %d (FTS5=%s)', SCHEMA_VERSION, self.fts5_available)
         else:
             self.fts5_available = await _check_fts5_exists(self._db)
+
+        await self._db.commit()
+        log.info(
+            "Database ready at version %d (FTS5=%s)",
+            SCHEMA_VERSION,
+            self.fts5_available,
+        )
 
     async def close(self) -> None:
         if self._db:
@@ -153,7 +188,11 @@ class Store:
 
     async def create_session(self, title: str | None = None) -> int:
         assert self._db
-        cur = await self._db.execute('INSERT INTO sessions (title) VALUES (?)', (title,))
+        now = _now_iso()
+        cur = await self._db.execute(
+            'INSERT INTO sessions (title, created_at, updated_at) VALUES (?, ?, ?)',
+            (title, now, now),
+        )
         await self._db.commit()
         return cur.lastrowid
 
@@ -191,8 +230,14 @@ class Store:
     async def add_message(self, session_id: int, role: str, content: Any) -> int:
         assert self._db
         content_json = json.dumps(content, ensure_ascii=False)
-        cur = await self._db.execute('INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)', (session_id, role, content_json))
-        await self._db.execute('UPDATE sessions SET updated_at = ? WHERE id = ?', (_now_iso(), session_id))
+        now = _now_iso()
+        cur = await self._db.execute(
+            'INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)',
+            (session_id, role, content_json, now),
+        )
+        await self._db.execute(
+            'UPDATE sessions SET updated_at = ? WHERE id = ?', (now, session_id)
+        )
         await self._db.commit()
         return cur.lastrowid
 
@@ -242,7 +287,6 @@ class Store:
 
     async def add_message_slimmed(self, session_id: int, role: str, content: Any) -> int:
         return await self.add_message(session_id, role, self.slim_content(role, content))
-
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')

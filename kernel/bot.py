@@ -130,6 +130,11 @@ async def run_bot() -> None:
             except asyncio.CancelledError:
                 pass
         try:
+            if stt_client:
+                await stt_client.close()
+        except BaseException:
+            pass
+        try:
             await store.close()
         except BaseException:
             pass

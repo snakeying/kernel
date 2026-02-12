@@ -1,10 +1,8 @@
 from __future__ import annotations
-
 import json
 from typing import Any
 
 _SLIM_THRESHOLD = 200
-
 
 def slim_content(_role: str, content: Any) -> Any:
     if not isinstance(content, list):
@@ -20,7 +18,7 @@ def slim_content(_role: str, content: Any) -> Any:
             continue
         if btype == 'text':
             text = block.get('text', '')
-            if text.startswith('[文件: ') and '\n```\n' in text:
+            if text.startswith('[文件: ') and '\n```' in text:
                 fname = text.split(']', 1)[0].removeprefix('[文件: ')
                 slimmed.append({'type': 'text', 'text': f'[文件 {fname} 已处理]'})
                 continue
@@ -38,7 +36,6 @@ def slim_content(_role: str, content: Any) -> Any:
         slimmed.append(block)
     return slimmed
 
-
 def _should_slim_tool_result(raw: str) -> bool:
     try:
         data = json.loads(raw)
@@ -47,7 +44,6 @@ def _should_slim_tool_result(raw: str) -> bool:
     except (json.JSONDecodeError, TypeError):
         pass
     return len(raw) > _SLIM_THRESHOLD
-
 
 def _summarise_tool_result(raw: str) -> str:
     try:

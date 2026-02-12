@@ -11,7 +11,7 @@ from telegram.constants import ChatAction, ParseMode
 from kernel.agent import Agent
 from kernel.config import Config
 from kernel.memory.store import Store
-from kernel.render import split_tg_message
+from kernel.render import split_plain_text, split_tg_message
 
 if TYPE_CHECKING:
     from kernel.voice.stt import STTClient
@@ -91,7 +91,10 @@ async def _require_idle(update: Update, state: BotState) -> bool:
 
 async def _send_text(update: Update, text: str, *, parse_mode: str | None = ParseMode.HTML) -> None:
     chat_id = update.effective_chat.id
-    chunks = split_tg_message(text) if parse_mode == ParseMode.HTML else [text]
+    if parse_mode == ParseMode.HTML:
+        chunks = split_tg_message(text)
+    else:
+        chunks = split_plain_text(text)
     for chunk in chunks:
         try:
             await update.get_bot().send_message(chat_id=chat_id, text=chunk, parse_mode=parse_mode, disable_web_page_preview=True)
