@@ -23,6 +23,57 @@ log = logging.getLogger(__name__)
 SCHEMA_VERSION = 4
 _DDL = "CREATE TABLE IF NOT EXISTS sessions (\n    id          INTEGER PRIMARY KEY AUTOINCREMENT,\n    title       TEXT,\n    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),\n    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),\n    archived    INTEGER NOT NULL DEFAULT 0\n);\n\nCREATE TABLE IF NOT EXISTS messages (\n    id          INTEGER PRIMARY KEY AUTOINCREMENT,\n    session_id  INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,\n    role        TEXT NOT NULL,\n    content     TEXT NOT NULL,\n    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))\n);\nCREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);\n\nCREATE TABLE IF NOT EXISTS settings (\n    key   TEXT PRIMARY KEY,\n    value TEXT NOT NULL\n);\n\nCREATE TABLE IF NOT EXISTS memories (\n    id          INTEGER PRIMARY KEY AUTOINCREMENT,\n    text        TEXT NOT NULL,\n    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))\n);\n"
 
+_REQUIRED_COLUMNS: dict[str, set[str]] = {
+    "sessions": {"id", "title", "created_at", "updated_at", "archived"},
+    "messages": {"id", "session_id", "role", "content", "created_at"},
+    "settings": {"key", "value"},
+    "memories": {"id", "text", "created_at"},
+}
+
+
+async def _get_user_version(db: aiosqlite.Connection) -> int:
+    cur = await db.execute("PRAGMA user_version")
+    row = await cur.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def _table_columns(db: aiosqlite.Connection, table: str) -> set[str]:
+    cur = await db.execute(f'PRAGMA table_info("{table}")')
+    rows = await cur.fetchall()
+    return {r["name"] for r in rows}
+
+
+async def _schema_compatible(db: aiosqlite.Connection) -> bool:
+    version = await _get_user_version(db)
+    if version != SCHEMA_VERSION:
+        return False
+    for table, required in _REQUIRED_COLUMNS.items():
+        cols = await _table_columns(db, table)
+        if not required.issubset(cols):
+            return False
+    return True
+
+
+def _delete_db_files(db_path: Path) -> None:
+    candidates = [
+        db_path,
+        db_path.with_name(db_path.name + "-wal"),
+        db_path.with_name(db_path.name + "-shm"),
+        db_path.with_name(db_path.name + "-journal"),
+    ]
+    errors: list[str] = []
+    for p in candidates:
+        try:
+            p.unlink(missing_ok=True)
+        except Exception as exc:
+            errors.append(f"{p}: {exc}")
+            log.warning("Failed to remove old DB file %s: %s", p, exc)
+    if db_path.exists():
+        msg = f"Failed to remove old DB file: {db_path}"
+        if errors:
+            msg += "\n" + "\n".join(errors)
+        raise RuntimeError(msg)
+
 
 class Store:
 
@@ -33,10 +84,34 @@ class Store:
 
     async def init(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = await aiosqlite.connect(str(self._db_path))
+        exists_before = self._db_path.exists()
+        try:
+            self._db = await aiosqlite.connect(str(self._db_path))
+        except Exception as exc:
+            if not exists_before:
+                raise
+            log.warning("Failed to open DB %s (%s) - rebuilding", self._db_path, exc)
+            _delete_db_files(self._db_path)
+            self._db = await aiosqlite.connect(str(self._db_path))
         self._db.row_factory = aiosqlite.Row
         await self._db.execute('PRAGMA journal_mode=WAL')
         await self._db.execute('PRAGMA foreign_keys=ON')
+
+        if exists_before:
+            needs_rebuild = False
+            try:
+                needs_rebuild = not await _schema_compatible(self._db)
+            except Exception as exc:
+                log.warning("DB schema check failed (%s) - rebuilding", exc)
+                needs_rebuild = True
+            if needs_rebuild:
+                log.warning("DB schema mismatch - rebuilding database (data will be lost)")
+                await self.close()
+                _delete_db_files(self._db_path)
+                self._db = await aiosqlite.connect(str(self._db_path))
+                self._db.row_factory = aiosqlite.Row
+                await self._db.execute('PRAGMA journal_mode=WAL')
+                await self._db.execute('PRAGMA foreign_keys=ON')
         await self._migrate()
 
     async def _migrate(self) -> None:

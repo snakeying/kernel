@@ -89,7 +89,7 @@ class AgentChatMixin:
             await self.store.add_message_slimmed(
                 self._session_id, Role.ASSISTANT.value, _content_to_json(assistant_blocks)
             )
-            if not tool_chunks or finish_reason not in ("tool_use", "tool_calls"):
+            if not tool_chunks:
                 yield StreamChunk(finish_reason=finish_reason or "end_turn")
                 break
             result_blocks: list[ContentBlock] = []

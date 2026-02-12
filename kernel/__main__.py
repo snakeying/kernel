@@ -1,11 +1,17 @@
 import asyncio
 import logging
 import sys
-from kernel.bot import run_bot
 log = logging.getLogger('kernel')
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
+    from kernel.tg_common import MaskingFormatter
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(
+        MaskingFormatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    )
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
+    from kernel.bot import run_bot
     try:
         asyncio.run(run_bot())
     except KeyboardInterrupt:
