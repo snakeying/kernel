@@ -1,7 +1,7 @@
 from __future__ import annotations
 import inspect
 import logging
-from typing import Any, Awaitable, Callable, Literal, get_args, get_origin
+from typing import Any, Awaitable, Callable, Literal, get_args, get_origin, get_type_hints
 from kernel.models.base import ToolDef
 log = logging.getLogger(__name__)
 _TYPE_MAP: dict[type, str] = {str: 'string', int: 'integer', float: 'number', bool: 'boolean'}
@@ -39,7 +39,10 @@ def _python_type_to_schema(annotation: Any) -> dict[str, Any]:
 
 def _build_parameters_schema(func: Callable[..., Any]) -> dict[str, Any]:
     sig = inspect.signature(func)
-    hints = func.__annotations__ if hasattr(func, '__annotations__') else {}
+    try:
+        hints = get_type_hints(func)
+    except Exception:
+        hints = func.__annotations__ if hasattr(func, '__annotations__') else {}
     properties: dict[str, Any] = {}
     required: list[str] = []
     for name, param in sig.parameters.items():

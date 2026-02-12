@@ -21,8 +21,6 @@ def _to_anthropic_content(blocks: list[ContentBlock] | str) -> list[dict[str, An
 def _to_anthropic_messages(messages: list[Message]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for msg in messages:
-        if msg.role == Role.SYSTEM:
-            continue
         role = 'user' if msg.role == Role.TOOL_RESULT else msg.role.value
         content = _to_anthropic_content(msg.content)
         out.append({'role': role, 'content': content})

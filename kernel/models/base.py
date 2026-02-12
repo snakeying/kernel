@@ -5,7 +5,6 @@ from enum import Enum
 from typing import Any, AsyncIterator
 
 class Role(str, Enum):
-    SYSTEM = 'system'
     USER = 'user'
     ASSISTANT = 'assistant'
     TOOL_RESULT = 'tool_result'

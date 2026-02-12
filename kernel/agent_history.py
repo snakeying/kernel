@@ -61,7 +61,12 @@ class AgentHistoryMixin:
                     break
             return self._tool_safe_history(messages[start:])
         max_msgs = rounds * 2
-        truncated = messages if len(messages) <= max_msgs else messages[-max_msgs:]
+        if len(messages) <= max_msgs:
+            return self._tool_safe_history(messages)
+        truncated = messages[-max_msgs:]
+        for i, msg in enumerate(truncated):
+            if msg.role == Role.USER:
+                return self._tool_safe_history(truncated[i:])
         return self._tool_safe_history(truncated)
 
     def _slim_history_inplace(self) -> None:

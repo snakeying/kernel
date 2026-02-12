@@ -152,7 +152,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await state.agent.maybe_generate_title()
 
         if state._last_message_was_voice and state.tts:
-            state._last_message_was_voice = False
             voice_path: Path | None = None
             try:
                 speak_text = _to_tts_text(full_text)
@@ -171,8 +170,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 if voice_path:
                     voice_path.unlink(missing_ok=True)
 
-        if msg and (not msg.voice):
-            state._last_message_was_voice = False
         try:
             html_text = md_to_tg_html(full_text)
             await _send_text(update, html_text, parse_mode=ParseMode.HTML)
@@ -181,5 +178,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await _send_text(update, full_text, parse_mode=None)
     finally:
         state._chat_task = None
+        state._last_message_was_voice = False
         state.busy = False
         state._chat_gate.put_nowait(None)

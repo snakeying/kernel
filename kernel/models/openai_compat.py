@@ -23,9 +23,6 @@ def _to_openai_messages(messages: list[Message], *, system: str | None=None) -> 
     if system:
         out.append({'role': 'system', 'content': system})
     for msg in messages:
-        if msg.role == Role.SYSTEM:
-            out.append({'role': 'system', 'content': msg.text_content()})
-            continue
         if msg.role == Role.USER:
             out.append({'role': 'user', 'content': _to_openai_content(msg.content)})
             continue
