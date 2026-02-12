@@ -76,12 +76,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             doc = msg.document
             filename = _sanitize_filename(doc.file_name or 'unknown')
             supported = _is_text_file(filename)
-            if supported is False:
+            if not supported:
                 ext = Path(filename).suffix.lower()
-                await _send_text(update, f'不支持的文件类型：{ext}\n目前仅支持文本和代码文件（UTF-8）。', parse_mode=None)
-                return
-            if supported is None:
-                await _send_text(update, f'无法识别的文件类型：{filename}\n目前仅支持文本和代码文件（UTF-8）。', parse_mode=None)
+                shown = ext or filename
+                await _send_text(
+                    update,
+                    '不支持的文件类型：'
+                    f'{shown}\n'
+                    '仅支持 UTF-8 文本文件：.txt .md .py .json .yaml .yml .toml .ini .sql .csv .log，'
+                    '以及 Makefile/Dockerfile。',
+                    parse_mode=None,
+                )
                 return
             if doc.file_size and doc.file_size > _MAX_FILE_SIZE:
                 await _send_text(update, '文件超过 20MB，无法处理。', parse_mode=None)
