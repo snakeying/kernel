@@ -132,7 +132,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             async for chunk in state.agent.chat(user_content):
                 if chunk.text:
                     text_parts.append(chunk.text)
-                elif chunk.tool_name and (not chunk.text):
+                elif chunk.tool_name:
                     tool = chunk.tool_name
                     if tool == 'delegate_to_cli':
                         await _send_text(update, '⏳ 正在执行任务…', parse_mode=None)

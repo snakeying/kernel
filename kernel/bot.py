@@ -68,8 +68,6 @@ async def run_bot() -> None:
 
     tts_client = None
     if config.tts:
-        import static_ffmpeg
-        static_ffmpeg.add_paths()
         tts_client = TTSClient(voice=config.tts.voice)
         log.info('TTS enabled: %s', config.tts.voice)
 

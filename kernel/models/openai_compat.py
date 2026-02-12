@@ -143,9 +143,8 @@ class OpenAICompatLLM(LLM):
                 for sc in _flush_tool_calls():
                     yield sc
                 yield StreamChunk(finish_reason=finish)
-            if tool_calls_acc:
-                for sc in _flush_tool_calls():
-                    yield sc
+        for sc in _flush_tool_calls():
+            yield sc
 
     async def close(self) -> None:
         await self._client.close()
