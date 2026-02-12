@@ -50,16 +50,6 @@ class Message:
                 parts.append(block.text)
         return '\n'.join(parts)
 
-    def has_tool_use(self) -> bool:
-        if isinstance(self.content, str):
-            return False
-        return any((isinstance(b, ToolUseContent) for b in self.content))
-
-    def tool_use_blocks(self) -> list[ToolUseContent]:
-        if isinstance(self.content, str):
-            return []
-        return [b for b in self.content if isinstance(b, ToolUseContent)]
-
 @dataclass
 class ToolDef:
     name: str
@@ -86,12 +76,6 @@ class LLMResponse:
             if isinstance(block, TextContent):
                 parts.append(block.text)
         return '\n'.join(parts)
-
-    def has_tool_use(self) -> bool:
-        return any((isinstance(b, ToolUseContent) for b in self.content))
-
-    def tool_use_blocks(self) -> list[ToolUseContent]:
-        return [b for b in self.content if isinstance(b, ToolUseContent)]
 
 class LLM(ABC):
 

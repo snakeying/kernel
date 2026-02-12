@@ -292,7 +292,7 @@ data/
 └── voice_replies/      # Temporary TTS output (auto-cleaned after 7 days)
 ```
 
-Periodic cleanup runs every 6 hours, removing files older than 7 days from temp directories.
+Periodic cleanup runs every 24 hours, removing files older than 7 days from temp directories.
 
 ---
 

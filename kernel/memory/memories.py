@@ -108,7 +108,8 @@ async def memory_search(db: aiosqlite.Connection, query: str, *, limit: int = 5,
                     return [dict(r) for r in rows]
             except Exception:
                 pass
-    cur = await db.execute('SELECT id, text, created_at FROM memories WHERE text LIKE ? ORDER BY id DESC LIMIT ?', (f'%{query}%', limit))
+    escaped = query.replace('%', '\\%').replace('_', '\\_')
+    cur = await db.execute("SELECT id, text, created_at FROM memories WHERE text LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?", (f'%{escaped}%', limit))
     rows = await cur.fetchall()
     return [dict(r) for r in rows]
 

@@ -47,6 +47,22 @@ def _make_titles_llm(cfg: TitlesConfig) -> LLM:
     )
 
 
+def _build_title_prompt(rows: list[dict]) -> str:
+    parts: list[str] = []
+    for r in rows:
+        content = r["content"]
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            text = " ".join(
+                b["text"] for b in content if isinstance(b, dict) and b.get("type") == "text"
+            )
+        else:
+            continue
+        parts.append(f"{r['role']}: {text}")
+    return f"根据以下对话生成一个简短的标题（10字以内，不要引号）：\n\n" + "\n".join(parts)
+
+
 class AgentTitlesMixin:
     async def maybe_generate_title(self) -> None:
         if self._session_id is None:
@@ -55,31 +71,20 @@ class AgentTitlesMixin:
         if session and (not session.get("title")):
             asyncio.create_task(self._generate_title(self._session_id))
 
-    async def _generate_title(self, session_id: int) -> None:
+    def _ensure_titles_llm(self) -> bool:
         if not self.config.titles:
-            return
+            return False
         if self._titles_llm is None:
             self._titles_llm = _make_titles_llm(self.config.titles)
+        return True
+
+    async def _generate_title(self, session_id: int) -> None:
+        if not self._ensure_titles_llm():
+            return
         rows = await self.store.get_messages(session_id, limit=4)
         if not rows:
             return
-        conversation = ""
-        for r in rows:
-            content = r["content"]
-            if isinstance(content, str):
-                text = content
-            elif isinstance(content, list):
-                text = " ".join(
-                    (
-                        b["text"]
-                        for b in content
-                        if isinstance(b, dict) and b.get("type") == "text"
-                    )
-                )
-            else:
-                continue
-            conversation += f"{r['role']}: {text}\n"
-        prompt = f"根据以下对话生成一个简短的标题（10字以内，不要引号）：\n\n{conversation}"
+        prompt = _build_title_prompt(rows)
         for attempt, delay in enumerate(TITLE_RETRY_DELAYS):
             if delay:
                 await asyncio.sleep(delay)
@@ -108,30 +113,12 @@ class AgentTitlesMixin:
         )
 
     async def regenerate_title(self, session_id: int) -> str | None:
-        if not self.config.titles:
+        if not self._ensure_titles_llm():
             return None
-        if self._titles_llm is None:
-            self._titles_llm = _make_titles_llm(self.config.titles)
         rows = await self.store.get_messages(session_id, limit=6)
         if not rows:
             return None
-        conversation = ""
-        for r in rows:
-            content = r["content"]
-            if isinstance(content, str):
-                text = content
-            elif isinstance(content, list):
-                text = " ".join(
-                    (
-                        b["text"]
-                        for b in content
-                        if isinstance(b, dict) and b.get("type") == "text"
-                    )
-                )
-            else:
-                continue
-            conversation += f"{r['role']}: {text}\n"
-        prompt = f"根据以下对话生成一个简短的标题（10字以内，不要引号）：\n\n{conversation}"
+        prompt = _build_title_prompt(rows)
         resp = await self._titles_llm.chat([Message(role=Role.USER, content=prompt)])
         title = _clean_title(resp.text_content())
         if title:

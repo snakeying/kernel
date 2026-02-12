@@ -22,7 +22,7 @@ MAX_TOOL_ROUNDS = 25
 
 
 class AgentChatMixin:
-    async def _build_system_prompt(self, user_query: str = "") -> str:
+    def _build_system_prompt(self) -> str:
         from datetime import datetime
         from zoneinfo import ZoneInfo
 
@@ -56,17 +56,7 @@ class AgentChatMixin:
             self._session_id, Role.USER.value, _content_to_json(user_content)
         )
         llm = self._get_llm()
-        if isinstance(user_content, str):
-            _user_query = user_content
-        elif isinstance(user_content, list):
-            _user_query = " ".join(
-                (b.text for b in user_content if isinstance(b, TextContent))
-            )
-        else:
-            _user_query = ""
-        if len(_user_query) > 2000:
-            _user_query = _user_query[:2000]
-        system = await self._build_system_prompt(_user_query)
+        system = self._build_system_prompt()
         tools_list = list(self._tools.values()) if self._tools else None
         for _round in range(MAX_TOOL_ROUNDS):
             self._check_cancel()
