@@ -52,7 +52,15 @@ class AgentHistoryMixin:
         return final
 
     def _truncate_history(self, messages: list[Message]) -> list[Message]:
-        max_msgs = self.config.general.context_rounds * 2
+        rounds = self.config.general.context_rounds
+        if rounds <= 0:
+            start = 0
+            for i in range(len(messages) - 1, -1, -1):
+                if messages[i].role == Role.USER:
+                    start = i
+                    break
+            return self._tool_safe_history(messages[start:])
+        max_msgs = rounds * 2
         truncated = messages if len(messages) <= max_msgs else messages[-max_msgs:]
         return self._tool_safe_history(truncated)
 

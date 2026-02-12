@@ -93,7 +93,10 @@ async def memory_search(db: aiosqlite.Connection, query: str, *, limit: int = 5,
     if fts5_available:
         tokenized = _tokenize(query)
         try:
-            cur = await db.execute('SELECT m.id, m.text, m.created_at FROM memories m JOIN memories_fts f ON m.id = f.rowid WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?', (tokenized, limit))
+            cur = await db.execute(
+                'SELECT m.id, m.text, m.created_at FROM memories m JOIN memories_fts f ON m.id = f.rowid WHERE memories_fts MATCH ? ORDER BY bm25(memories_fts) LIMIT ?',
+                (tokenized, limit),
+            )
             rows = await cur.fetchall()
             if rows:
                 return [dict(r) for r in rows]
@@ -102,7 +105,10 @@ async def memory_search(db: aiosqlite.Connection, query: str, *, limit: int = 5,
         or_query = _fts_or_query(query)
         if or_query:
             try:
-                cur = await db.execute('SELECT m.id, m.text, m.created_at FROM memories m JOIN memories_fts f ON m.id = f.rowid WHERE memories_fts MATCH ? ORDER BY rank LIMIT ?', (or_query, limit))
+                cur = await db.execute(
+                    'SELECT m.id, m.text, m.created_at FROM memories m JOIN memories_fts f ON m.id = f.rowid WHERE memories_fts MATCH ? ORDER BY bm25(memories_fts) LIMIT ?',
+                    (or_query, limit),
+                )
                 rows = await cur.fetchall()
                 if rows:
                     return [dict(r) for r in rows]

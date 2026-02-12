@@ -81,6 +81,10 @@ def load_config(path: str | Path | None = None) -> Config:
         env_key = _provider_env_key(name)
         api_key = os.environ.get(env_key) or praw.get("api_key", "")
         ptype = praw.get("type", "openai_compat")
+        if ptype not in ("claude", "openai_compat"):
+            raise SystemExit(
+                f"providers.{name}.type must be one of: claude, openai_compat (got {ptype!r})"
+            )
         max_tokens = praw.get("max_tokens")
         if ptype == "claude" and max_tokens is None:
             raise SystemExit(f"providers.{name}.max_tokens is required for Claude providers.")
@@ -115,13 +119,18 @@ def load_config(path: str | Path | None = None) -> Config:
         t = raw["titles"]
         t_api_key = os.environ.get("KERNEL_TITLES_API_KEY") or t.get("api_key", "")
         if t_api_key and t_api_key != "sk-...":
+            t_type = t.get("type", "openai_compat")
+            if t_type not in ("claude", "openai_compat"):
+                raise SystemExit(
+                    f"titles.type must be one of: claude, openai_compat (got {t_type!r})"
+                )
             try:
                 t_headers = _expand_headers(t.get("headers"))
             except ValueError as exc:
                 log.warning("Titles headers: %s - skipping headers", exc)
                 t_headers = None
             titles = TitlesConfig(
-                type=t.get("type", "openai_compat"),
+                type=t_type,
                 api_base=t.get("api_base", ""),
                 api_key=t_api_key,
                 model=t.get("model", ""),

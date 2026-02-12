@@ -6,7 +6,7 @@ from typing import Any
 _SLIM_THRESHOLD = 200
 
 
-def slim_content(role: str, content: Any) -> Any:
+def slim_content(_role: str, content: Any) -> Any:
     if not isinstance(content, list):
         return content
     slimmed: list[Any] = []
@@ -66,4 +66,3 @@ def _summarise_tool_result(raw: str) -> str:
         pass
     preview = raw[:80].replace('\n', ' ')
     return f'[工具结果: {preview}… ({len(raw)} 字符已省略)]'
-

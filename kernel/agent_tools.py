@@ -113,8 +113,6 @@ class AgentToolsMixin:
         self._active_cli = agent
         try:
             result = await agent.run(task, work_dir)
-        except asyncio.CancelledError:
-            return {"ok": False, "error": "Task cancelled by user"}
         finally:
             self._active_cli = None
         return result.to_dict()

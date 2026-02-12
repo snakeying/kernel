@@ -54,7 +54,6 @@ _TEXT_EXTENSIONS: set[str] = {
     '.pl',
     '.lua',
     '.r',
-    '.R',
     '.jl',
     '.swift',
     '.m',
