@@ -1,10 +1,7 @@
 from __future__ import annotations
-
 from telegram import Update
 from telegram.ext import ContextTypes
-
 from kernel.tg_common import BotState, _check_user, _require_idle, _send_text
-
 
 async def cmd_provider(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state: BotState = context.bot_data['state']
@@ -29,7 +26,6 @@ async def cmd_provider(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except ValueError as exc:
         await _send_text(update, str(exc), parse_mode=None)
 
-
 async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state: BotState = context.bot_data['state']
     if not _check_user(update, state):
@@ -52,7 +48,6 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except ValueError as exc:
         await _send_text(update, str(exc), parse_mode=None)
 
-
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state: BotState = context.bot_data['state']
     if not _check_user(update, state):
@@ -68,7 +63,6 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await _send_text(update, msg, parse_mode=None)
     else:
         await _send_text(update, '当前没有进行中的任务。', parse_mode=None)
-
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state: BotState = context.bot_data['state']
@@ -89,4 +83,3 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"Time: {state.local_now().strftime('%Y-%m-%d %H:%M:%S')}",
     ]
     await _send_text(update, '\n'.join(lines))
-

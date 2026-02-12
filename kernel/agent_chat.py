@@ -1,10 +1,8 @@
 from __future__ import annotations
-
 import asyncio
 import json
 import logging
 from typing import AsyncIterator
-
 from kernel.agent_content import _content_to_json
 from kernel.models.base import (
     ContentBlock,
@@ -19,7 +17,6 @@ from kernel.models.base import (
 log = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 25
-
 
 class AgentChatMixin:
     def _build_system_prompt(self) -> str:
@@ -37,12 +34,8 @@ class AgentChatMixin:
         k = self.config.general.memory_recall_k
         if k > 0:
             parts.append(
-                "## 长期记忆（工具访问）\n"
-                "你可以通过 memory_search / memory_list 访问长期记忆。\n"
-                "在回答前先判断是否需要记忆：当问题可能依赖用户偏好、身份信息、历史约定或长期计划时，优先调用 memory_search。\n"
-                "如果问题明显不依赖长期信息，请不要调用。\n"
-                "query 请用你自己改写后的关键词（名词为主，避免照抄原句）。\n"
-                f"如果 memory_search 结果为空但仍可能相关，再调用 memory_list(limit={k}) 快速浏览。"
+                "## 长期记忆（参数提示）\n"
+                f"memory_recall_k = {k}；需要快速浏览时可用 memory_list(limit={k})。"
             )
         return "\n\n".join(parts) if parts else ""
 

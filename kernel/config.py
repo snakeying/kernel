@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from kernel.config_load import load_config
 from kernel.config_types import (
     CLIConfig,

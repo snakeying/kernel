@@ -1,9 +1,7 @@
 from __future__ import annotations
-
 import asyncio
 import logging
 import re
-
 from kernel.config import TitlesConfig
 from kernel.models.base import LLM, Message, Role
 from kernel.models.claude import ClaudeLLM
@@ -17,7 +15,6 @@ TITLE_MAX_LEN = 30
 _THINK_RE = re.compile("<think>.*?</think>", re.DOTALL)
 _THINK_OPEN_RE = re.compile("<think>.*", re.DOTALL)
 
-
 def _clean_title(raw: str) -> str:
     text = _THINK_RE.sub("", raw)
     text = _THINK_OPEN_RE.sub("", text)
@@ -27,7 +24,6 @@ def _clean_title(raw: str) -> str:
         if line:
             return line[:TITLE_MAX_LEN]
     return ""
-
 
 def _make_titles_llm(cfg: TitlesConfig) -> LLM:
     if cfg.type == "claude":
@@ -46,7 +42,6 @@ def _make_titles_llm(cfg: TitlesConfig) -> LLM:
         headers=cfg.headers,
     )
 
-
 def _build_title_prompt(rows: list[dict]) -> str:
     parts: list[str] = []
     for r in rows:
@@ -60,8 +55,7 @@ def _build_title_prompt(rows: list[dict]) -> str:
         else:
             continue
         parts.append(f"{r['role']}: {text}")
-    return f"根据以下对话生成一个简短的标题（10字以内，不要引号）：\n\n" + "\n".join(parts)
-
+    return "根据以下对话生成一个简短的标题（10字以内，不要引号）：\n\n" + "\n".join(parts)
 
 class AgentTitlesMixin:
     async def maybe_generate_title(self) -> None:
@@ -124,4 +118,3 @@ class AgentTitlesMixin:
         if title:
             await self.store.update_session_title(session_id, title)
         return title or None
-

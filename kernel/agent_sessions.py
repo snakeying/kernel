@@ -1,8 +1,6 @@
 from __future__ import annotations
-
 import asyncio
 import logging
-
 from kernel.agent_content import _json_to_message
 from kernel.config import ProviderConfig
 from kernel.models.base import LLM
@@ -10,7 +8,6 @@ from kernel.models.claude import ClaudeLLM
 from kernel.models.openai_compat import OpenAICompatLLM
 
 log = logging.getLogger(__name__)
-
 
 def _make_llm(provider: ProviderConfig) -> LLM:
     if provider.type == "claude":
@@ -28,7 +25,6 @@ def _make_llm(provider: ProviderConfig) -> LLM:
         max_tokens=provider.max_tokens,
         headers=provider.headers,
     )
-
 
 class AgentSessionsMixin:
     @property
@@ -132,4 +128,3 @@ class AgentSessionsMixin:
             self._session_id = await self.store.create_session()
             self._history = []
         return self._session_id
-

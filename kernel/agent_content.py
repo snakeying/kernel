@@ -1,7 +1,5 @@
 from __future__ import annotations
-
 from typing import Any
-
 from kernel.models.base import (
     ContentBlock,
     ImageContent,
@@ -11,7 +9,6 @@ from kernel.models.base import (
     ToolResultContent,
     ToolUseContent,
 )
-
 
 def _content_to_json(content: list[ContentBlock] | str) -> Any:
     if isinstance(content, str):
@@ -35,7 +32,6 @@ def _content_to_json(content: list[ContentBlock] | str) -> Any:
             )
     return out
 
-
 def _json_to_content(data: Any) -> list[ContentBlock] | str:
     if isinstance(data, str):
         return data
@@ -52,7 +48,6 @@ def _json_to_content(data: Any) -> list[ContentBlock] | str:
                 server, tool = name.split(".", 1)
                 try:
                     from kernel.mcp.client import _safe_tool_name
-
                     name = _safe_tool_name(server, tool)
                 except Exception:
                     name = f"mcp_{server}__{tool}".replace(".", "_")
@@ -67,9 +62,7 @@ def _json_to_content(data: Any) -> list[ContentBlock] | str:
             )
     return blocks
 
-
 def _json_to_message(row: dict[str, Any]) -> Message:
     role = Role(row["role"])
     content = _json_to_content(row["content"])
     return Message(role=role, content=content)
-

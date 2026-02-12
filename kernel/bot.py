@@ -1,11 +1,8 @@
 from __future__ import annotations
-
 import asyncio
 import logging
-
 from telegram import BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
-
 from kernel.agent import Agent
 from kernel.bot_cleanup import cleanup_old_files, periodic_cleanup
 from kernel.bot_logging import setup_logging
@@ -20,7 +17,6 @@ from kernel.voice.stt import STTClient
 from kernel.voice.tts import TTSClient
 
 log = logging.getLogger(__name__)
-
 
 async def _post_init(app: Application) -> None:
     commands = [

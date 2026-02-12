@@ -1,12 +1,10 @@
 from __future__ import annotations
-
 import logging
 import os
 import re
 import sys
 from pathlib import Path
 from typing import Any
-
 from kernel.config_types import (
     CLIConfig,
     Config,
@@ -28,7 +26,6 @@ log = logging.getLogger(__name__)
 
 _ENV_RE = re.compile(r"\$\{(\w+)\}")
 
-
 def _expand_env(value: str) -> str:
     def _repl(m: re.Match) -> str:
         name = m.group(1)
@@ -39,7 +36,6 @@ def _expand_env(value: str) -> str:
 
     return _ENV_RE.sub(_repl, value)
 
-
 def _expand_headers(headers: dict[str, str] | None) -> dict[str, str] | None:
     if headers is None:
         return None
@@ -48,11 +44,9 @@ def _expand_headers(headers: dict[str, str] | None) -> dict[str, str] | None:
         expanded[k] = _expand_env(v) if "${" in v else v
     return expanded
 
-
 def _provider_env_key(provider_name: str) -> str:
     sanitised = re.sub("[^A-Za-z0-9]", "_", provider_name).upper()
     return f"KERNEL_PROVIDER_{sanitised}_API_KEY"
-
 
 def load_config(path: str | Path | None = None) -> Config:
     if path is None:
@@ -63,7 +57,6 @@ def load_config(path: str | Path | None = None) -> Config:
     with open(path, "rb") as f:
         raw: dict[str, Any] = tomllib.load(f)
     config_dir = path.parent
-
     tg_raw = raw.get("telegram", {})
     tg_token = os.environ.get("KERNEL_TELEGRAM_TOKEN") or tg_raw.get("token", "")
     tg_user = tg_raw.get("allowed_user", 0)

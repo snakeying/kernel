@@ -1,12 +1,10 @@
 from __future__ import annotations
-
 import asyncio
 import logging
 import time
 from pathlib import Path
 
 log = logging.getLogger(__name__)
-
 
 def cleanup_old_files(dir_path: Path, *, max_age_days: int) -> int:
     if not dir_path.exists():
@@ -24,7 +22,6 @@ def cleanup_old_files(dir_path: Path, *, max_age_days: int) -> int:
             log.debug("Cleanup failed for %s", p, exc_info=True)
     return deleted
 
-
 async def periodic_cleanup(
     data_path: Path, *, max_age_days: int, interval_hours: int = 24
 ) -> None:
@@ -39,4 +36,3 @@ async def periodic_cleanup(
         except Exception:
             log.debug("Cleanup loop failed", exc_info=True)
         await asyncio.sleep(interval_hours * 3600)
-

@@ -79,7 +79,11 @@ class OpenAICompatLLM(LLM):
             content.append(TextContent(text=msg.content))
         if msg.tool_calls:
             for tc in msg.tool_calls:
-                content.append(ToolUseContent(id=tc.id, name=tc.function.name, input=json.loads(tc.function.arguments)))
+                try:
+                    args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                except Exception:
+                    args = {}
+                content.append(ToolUseContent(id=tc.id, name=tc.function.name, input=args))
         return LLMResponse(content=content, stop_reason=choice.finish_reason, usage={'input_tokens': resp.usage.prompt_tokens if resp.usage else 0, 'output_tokens': resp.usage.completion_tokens if resp.usage else 0})
 
     async def chat_stream(self, messages: list[Message], *, system: str | None=None, tools: list[ToolDef] | None=None, model: str | None=None) -> AsyncIterator[StreamChunk]:

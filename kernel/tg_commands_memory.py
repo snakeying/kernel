@@ -1,11 +1,8 @@
 from __future__ import annotations
-
 import html
 from typing import Any
-
 from telegram import Update
 from telegram.ext import ContextTypes
-
 from kernel.tg_common import BotState, _check_user, _send_text
 
 _memory_map: dict[int, int] = {}
@@ -24,7 +21,6 @@ def _resolve_memory_num(num_str: str) -> int | None:
         return None
     return _memory_map.get(n)
 
-
 async def cmd_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state: BotState = context.bot_data['state']
     if not _check_user(update, state):
@@ -35,7 +31,6 @@ async def cmd_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     mid = await state.store.memory_add(text)
     await _send_text(update, f'已记住 (id={mid})', parse_mode=None)
-
 
 async def cmd_memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state: BotState = context.bot_data['state']
@@ -52,7 +47,6 @@ async def cmd_memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         date = state.format_dt(m['created_at'])
         lines.append(f"<b>#{n}</b> {date} {html.escape(m['text'])}")
     await _send_text(update, '\n'.join(lines))
-
 
 async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state: BotState = context.bot_data['state']
@@ -74,4 +68,3 @@ async def cmd_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if await state.store.memory_delete(mid):
             deleted += 1
     await _send_text(update, f'已删除 {deleted} 条记忆。', parse_mode=None)
-

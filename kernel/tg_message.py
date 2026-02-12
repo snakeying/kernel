@@ -1,28 +1,26 @@
 from __future__ import annotations
-
 import asyncio
 import base64
 import logging
 from io import BytesIO
 from pathlib import Path
 from typing import Any
-
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
-
 from kernel.render import md_to_tg_html, split_tg_message
 from kernel.tg_common import BotState, _check_user, _mask_sensitive, _sanitize_filename, _send_text, _send_typing
 from kernel.tg_message_utils import _MAX_FILE_SIZE, _extract_file_text, _is_text_file, _to_tts_text
 
 log = logging.getLogger(__name__)
 
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     state: BotState = context.bot_data['state']
     if not _check_user(update, state):
         return
-    if state.busy:
+    try:
+        state._chat_gate.get_nowait()
+    except asyncio.QueueEmpty:
         if not state.busy_notified:
             state.busy_notified = True
             await _send_text(update, '正在处理上一条消息，请稍后或 /cancel', parse_mode=None)
@@ -32,7 +30,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     state._chat_task = asyncio.current_task()
     try:
         from kernel.models.base import ImageContent, TextContent
-
         content_blocks: list[Any] = []
         msg = update.message
         if msg and msg.voice:
@@ -110,7 +107,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 content_blocks.append(TextContent(text=msg.caption))
         elif msg and msg.text:
             content_blocks.append(TextContent(text=msg.text))
-
         if not content_blocks:
             return
         user_content = content_blocks
@@ -183,3 +179,4 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     finally:
         state._chat_task = None
         state.busy = False
+        state._chat_gate.put_nowait(None)

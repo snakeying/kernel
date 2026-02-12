@@ -1,14 +1,11 @@
 from __future__ import annotations
-
 from dataclasses import dataclass, field
 from pathlib import Path
-
 
 @dataclass
 class TelegramConfig:
     token: str
     allowed_user: int
-
 
 @dataclass
 class GeneralConfig:
@@ -18,7 +15,6 @@ class GeneralConfig:
     context_rounds: int = 50
     memory_recall_k: int = 5
     data_dir: str = "data"
-
 
 @dataclass
 class ProviderConfig:
@@ -31,7 +27,6 @@ class ProviderConfig:
     max_tokens: int | None = None
     headers: dict[str, str] | None = None
 
-
 @dataclass
 class TitlesConfig:
     type: str
@@ -41,7 +36,6 @@ class TitlesConfig:
     max_tokens: int = 100
     headers: dict[str, str] | None = None
 
-
 @dataclass
 class STTConfig:
     api_base: str
@@ -49,17 +43,14 @@ class STTConfig:
     model: str = "whisper-1"
     headers: dict[str, str] | None = None
 
-
 @dataclass
 class TTSConfig:
     voice: str
-
 
 @dataclass
 class CLIConfig:
     command: str
     args: list[str] = field(default_factory=list)
-
 
 @dataclass
 class MCPServerConfig:
@@ -69,7 +60,6 @@ class MCPServerConfig:
     command: str | None = None
     args: list[str] | None = None
     headers: dict[str, str] | None = None
-
 
 @dataclass
 class Config:
@@ -90,4 +80,3 @@ class Config:
     @property
     def default_workspace_path(self) -> Path:
         return self.config_dir / self.general.default_workspace
-

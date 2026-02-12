@@ -1,11 +1,8 @@
 from __future__ import annotations
-
 import logging
 from logging.handlers import RotatingFileHandler
-
 from kernel.config import Config
 from kernel.tg_common import MaskingFormatter
-
 
 def setup_logging(config: Config) -> None:
     log_dir = config.data_path / "logs"
@@ -21,7 +18,5 @@ def setup_logging(config: Config) -> None:
     root = logging.getLogger()
     root.addHandler(fh)
 
-    # Avoid libraries logging full request URLs (may contain tokens) at INFO.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-

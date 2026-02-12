@@ -1,7 +1,5 @@
 from __future__ import annotations
-
 from typing import Any, Awaitable, Callable
-
 from kernel.agent_chat import AgentChatMixin
 from kernel.agent_history import AgentHistoryMixin
 from kernel.agent_sessions import AgentSessionsMixin
@@ -13,7 +11,6 @@ from kernel.mcp.client import MCPClient
 from kernel.models.base import LLM, Message, ToolDef
 from kernel.tools.registry import ToolRegistry
 from kernel.cli.base import CLIAgent
-
 
 class Agent(
     AgentToolsMixin, AgentSessionsMixin, AgentHistoryMixin, AgentChatMixin, AgentTitlesMixin

@@ -1,18 +1,15 @@
 from __future__ import annotations
-
 import asyncio
 import logging
 import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
-
 from kernel.cli.claude_code import ClaudeCodeAgent
 from kernel.cli.codex import CodexAgent
 from kernel.mcp.client import MCPClient
 
 log = logging.getLogger(__name__)
-
 
 class AgentToolsMixin:
     def _init_cli_agents(self) -> None:
@@ -151,4 +148,3 @@ class AgentToolsMixin:
         for cli in self._cli_agents.values():
             if cli.is_running:
                 await cli.kill()
-

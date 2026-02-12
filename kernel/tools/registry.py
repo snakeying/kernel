@@ -71,16 +71,8 @@ class ToolRegistry:
             return func
         return decorator
 
-    def register(self, name: str, *, description: str, parameters: dict[str, Any], handler: Callable[..., Awaitable[Any]]) -> None:
-        self._defs[name] = ToolDef(name=name, description=description, parameters=parameters)
-        self._handlers[name] = handler
-
     def tool_defs(self) -> dict[str, ToolDef]:
         return dict(self._defs)
 
     def handlers(self) -> dict[str, Callable[..., Awaitable[Any]]]:
         return dict(self._handlers)
-
-    def unregister(self, name: str) -> None:
-        self._defs.pop(name, None)
-        self._handlers.pop(name, None)

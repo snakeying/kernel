@@ -1,16 +1,13 @@
 from __future__ import annotations
-
 import html
 import re
 from pathlib import Path
-
 from kernel.render import md_to_tg_html
 
 _TTS_PRE_RE = re.compile(r'<pre(?:\s[^>]*)?>.*?</pre>', re.IGNORECASE | re.DOTALL)
 _TTS_TAG_RE = re.compile(r'<[^>]+>')
 _TTS_COLON_EMOJI_RE = re.compile(r':[A-Za-z][A-Za-z0-9_+-]{1,}:')
 _TTS_UNICODE_EMOJI_RE = re.compile(r'[\U0001F1E6-\U0001F1FF\U0001F300-\U0001F5FF\U0001F600-\U0001F64F\U0001F680-\U0001F6FF\U0001F900-\U0001F9FF\U0001FA70-\U0001FAFF\u2600-\u26FF\u2700-\u27BF]')
-
 
 def _to_tts_text(markdown: str) -> str:
     html_text = md_to_tg_html(markdown)
@@ -24,7 +21,6 @@ def _to_tts_text(markdown: str) -> str:
     text = re.sub(r'[ \t]+', ' ', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
-
 
 _MAX_FILE_SIZE = 20 * 1024 * 1024
 _MAX_TEXT_CHARS = 50000
@@ -139,7 +135,6 @@ _UNSUPPORTED_EXTENSIONS: set[str] = {
     '.ogg',
 }
 
-
 def _is_text_file(filename: str) -> bool | None:
     ext = Path(filename).suffix.lower()
     if not ext:
@@ -153,10 +148,8 @@ def _is_text_file(filename: str) -> bool | None:
         return False
     return None
 
-
 async def _extract_file_text(file_path: Path) -> str:
     text = file_path.read_text(encoding='utf-8')
     if len(text) > _MAX_TEXT_CHARS:
         text = text[:_MAX_TEXT_CHARS] + f'\n\n[… 截断，共 {len(text)} 字符]'
     return text
-

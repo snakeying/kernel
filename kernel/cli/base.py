@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import uuid
 from abc import ABC, abstractmethod
@@ -65,9 +66,22 @@ class CLIAgent(ABC):
             cmd[0] = resolved
         log.info('CLI [%s] running: %s', self.name, ' '.join(cmd[:5]) + ' ...')
         try:
-            use_shell = sys.platform == 'win32' and (not resolved)
-            if use_shell:
-                self._process = await asyncio.create_subprocess_shell(' '.join(cmd), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=cwd, env={**os.environ})
+            if sys.platform == 'win32':
+                if resolved and Path(resolved).suffix.lower() in ('.cmd', '.bat'):
+                    command_line = subprocess.list2cmdline(cmd)
+                    wrapped = ['cmd.exe', '/d', '/s', '/c', command_line]
+                    self._process = await asyncio.create_subprocess_exec(*wrapped, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=cwd, env={**os.environ})
+                elif resolved and Path(resolved).suffix.lower() == '.ps1':
+                    host = shutil.which('pwsh') or shutil.which('powershell')
+                    if not host:
+                        raise RuntimeError('PowerShell host not found to run .ps1')
+                    wrapped = [host, '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', resolved, *cmd[1:]]
+                    self._process = await asyncio.create_subprocess_exec(*wrapped, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=cwd, env={**os.environ})
+                elif not resolved:
+                    command_line = subprocess.list2cmdline(cmd)
+                    self._process = await asyncio.create_subprocess_shell(command_line, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=cwd, env={**os.environ})
+                else:
+                    self._process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=cwd, env={**os.environ})
             else:
                 self._process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=cwd, env={**os.environ})
             stdout_bytes, stderr_bytes = await asyncio.wait_for(self._process.communicate(), timeout=CLI_TIMEOUT)
@@ -100,8 +114,19 @@ class CLIAgent(ABC):
         if proc is None:
             return
         try:
-            proc.kill()
-            await proc.wait()
+            if sys.platform == 'win32' and proc.pid:
+                try:
+                    killer = await asyncio.create_subprocess_exec('taskkill', '/PID', str(proc.pid), '/T', '/F', stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                    await asyncio.wait_for(killer.communicate(), timeout=10)
+                except Exception:
+                    proc.kill()
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=10)
+                except Exception:
+                    pass
+            else:
+                proc.kill()
+                await proc.wait()
         except ProcessLookupError:
             pass
         except Exception:
